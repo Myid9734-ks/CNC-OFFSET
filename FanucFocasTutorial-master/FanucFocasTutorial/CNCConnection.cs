@@ -25,6 +25,7 @@ namespace FanucFocasTutorial
         private readonly int _timeout;
         private bool _isConnected;
         private readonly double _scale = 1000;
+        private readonly object _communicationLock = new object(); // CNC 통신 동기화용 lock
 
         // 생산 카운트 관련 필드
         private int _productionCount = 0;
@@ -41,6 +42,7 @@ namespace FanucFocasTutorial
         public bool IsConnected => _isConnected;
         public string ConnectionStatus { get; private set; }
         public ushort Handle => _handle;
+        public object CommunicationLock => _communicationLock;
 
         public CNCConnection(string ipAddress, ushort port = 8193, int timeout = 2)
         {

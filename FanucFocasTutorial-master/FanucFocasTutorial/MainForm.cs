@@ -102,6 +102,7 @@ namespace FanucFocasTutorial
 
         // 중앙 패널 필드 추가
         private Panel _centerPanel;
+        private MultiMonitoringForm _backgroundMonitoringForm; // 백그라운드에서 계속 실행되는 모니터링 폼
 
         // IP 저장 파일 경로
         private readonly string _ipConfigFile = Path.Combine(Application.StartupPath, "ip_config.xml");
@@ -409,7 +410,7 @@ namespace FanucFocasTutorial
                 TabIndex = 9
             };
             autoMonitoringButton.Click += (s, e) => {
-                // 기존 폼들 제거
+                // AutoOffsetForm, AutoMonitoringForm은 제거
                 var existingAutoOffsetForm = _centerPanel.Controls.OfType<AutoOffsetForm>().FirstOrDefault();
                 if (existingAutoOffsetForm != null)
                 {
@@ -425,17 +426,17 @@ namespace FanucFocasTutorial
                     existingAutoMonitoringForm.Dispose();
                 }
 
-                var existingMultiMonitoringForm = _centerPanel.Controls.OfType<MultiMonitoringForm>().FirstOrDefault();
-                if (existingMultiMonitoringForm != null)
+                // 다른 폼들 숨기기
+                var existingShiftDataForm = _centerPanel.Controls.OfType<ShiftDataViewForm>().FirstOrDefault();
+                if (existingShiftDataForm != null)
                 {
-                    _centerPanel.Controls.Remove(existingMultiMonitoringForm);
-                    existingMultiMonitoringForm.Dispose();
+                    _centerPanel.Controls.Remove(existingShiftDataForm);
                 }
 
                 _mainGroupBox.Visible = false;
                 _monitoringGroup.Visible = false;
 
-                // 등록된 모든 설비 수집 (연결 여부와 상관없이)
+                // 등록된 모든 설비 수집
                 var allConnections = _connectionManager.GetAllConnections().ToList();
 
                 if (allConnections.Count == 0)
@@ -444,15 +445,22 @@ namespace FanucFocasTutorial
                     return;
                 }
 
-                // MultiMonitoringForm을 MainForm 내부에 embedded로 표시
-                var multiMonitoringForm = new MultiMonitoringForm(allConnections);
-                multiMonitoringForm.TopLevel = false;
-                multiMonitoringForm.FormBorderStyle = FormBorderStyle.None;
-                multiMonitoringForm.Dock = DockStyle.Fill;
+                // 백그라운드 모니터링 폼 재사용 또는 새로 생성
+                if (_backgroundMonitoringForm == null || _backgroundMonitoringForm.IsDisposed)
+                {
+                    _backgroundMonitoringForm = new MultiMonitoringForm(allConnections);
+                    _backgroundMonitoringForm.TopLevel = false;
+                    _backgroundMonitoringForm.FormBorderStyle = FormBorderStyle.None;
+                    _backgroundMonitoringForm.Dock = DockStyle.Fill;
+                }
 
-                _centerPanel.Controls.Add(multiMonitoringForm);
-                multiMonitoringForm.Show();
-                multiMonitoringForm.BringToFront();
+                // 화면에 표시
+                if (!_centerPanel.Controls.Contains(_backgroundMonitoringForm))
+                {
+                    _centerPanel.Controls.Add(_backgroundMonitoringForm);
+                }
+                _backgroundMonitoringForm.Show();
+                _backgroundMonitoringForm.BringToFront();
             };
 
             // 근무조 현황 버튼
@@ -466,7 +474,7 @@ namespace FanucFocasTutorial
                 TabIndex = 10
             };
             shiftDataButton.Click += (s, e) => {
-                // 기존 폼들 제거
+                // AutoOffsetForm, AutoMonitoringForm은 제거
                 var existingAutoOffsetForm = _centerPanel.Controls.OfType<AutoOffsetForm>().FirstOrDefault();
                 if (existingAutoOffsetForm != null)
                 {
@@ -482,11 +490,10 @@ namespace FanucFocasTutorial
                     existingAutoMonitoringForm.Dispose();
                 }
 
-                var existingMultiMonitoringForm = _centerPanel.Controls.OfType<MultiMonitoringForm>().FirstOrDefault();
-                if (existingMultiMonitoringForm != null)
+                // MultiMonitoringForm은 백그라운드에서 유지 (화면에서만 제거)
+                if (_backgroundMonitoringForm != null && _centerPanel.Controls.Contains(_backgroundMonitoringForm))
                 {
-                    _centerPanel.Controls.Remove(existingMultiMonitoringForm);
-                    existingMultiMonitoringForm.Dispose();
+                    _centerPanel.Controls.Remove(_backgroundMonitoringForm);
                 }
 
                 var existingShiftDataForm = _centerPanel.Controls.OfType<ShiftDataViewForm>().FirstOrDefault();
@@ -521,7 +528,7 @@ namespace FanucFocasTutorial
                 TabIndex = 10
             };
             logRecordButton.Click += (s, e) => {
-                // 기존 자동 옵셋 폼이 있다면 로깅 중지 후 제거
+                // AutoOffsetForm, AutoMonitoringForm은 제거
                 var existingAutoOffsetForm = _centerPanel.Controls.OfType<AutoOffsetForm>().FirstOrDefault();
                 if (existingAutoOffsetForm != null)
                 {
@@ -530,12 +537,17 @@ namespace FanucFocasTutorial
                     existingAutoOffsetForm.Dispose();
                 }
 
-                // 기존 자동 모니터링 폼이 있다면 제거
                 var existingMonitoringForm = _centerPanel.Controls.OfType<AutoMonitoringForm>().FirstOrDefault();
                 if (existingMonitoringForm != null)
                 {
                     _centerPanel.Controls.Remove(existingMonitoringForm);
                     existingMonitoringForm.Dispose();
+                }
+
+                // MultiMonitoringForm은 백그라운드에서 유지 (화면에서만 제거)
+                if (_backgroundMonitoringForm != null && _centerPanel.Controls.Contains(_backgroundMonitoringForm))
+                {
+                    _centerPanel.Controls.Remove(_backgroundMonitoringForm);
                 }
 
                 _mainGroupBox.Visible = false;
