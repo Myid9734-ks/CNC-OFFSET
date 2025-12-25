@@ -98,6 +98,11 @@ namespace FanucFocasTutorial
     /// </summary>
     public class EquipmentMonitorPanel : GroupBox
     {
+        private static readonly string _logFilePath = Path.Combine(
+            AppDomain.CurrentDomain.BaseDirectory,
+            "R854_Debug.txt");
+        private static readonly object _logLock = new object();
+
         private CNCConnection _connection;
 
         // 근무조 관리
@@ -313,7 +318,7 @@ namespace FanucFocasTutorial
                     string alarmDetail = "";
                     try
                     {
-                        const short PMC_TYPE_R = 9;  // R-type (Internal relay)
+                        const short PMC_TYPE_R = 5;  // R-type (Internal relay)
 
                         // R854.2 체크
                         Focas1.IODBPMC0 pmcR854 = new Focas1.IODBPMC0();
@@ -321,12 +326,36 @@ namespace FanucFocasTutorial
 
                         if (ret854 == Focas1.EW_OK)
                         {
-                            hasAlarmPmcA = (pmcR854.cdata[0] & (1 << 2)) != 0;  // Bit 2 체크
-                            alarmDetail = $"R854.2={hasAlarmPmcA}";
+                            byte byteValue = pmcR854.cdata[0];
+                            bool bit0 = (byteValue & (1 << 0)) != 0;
+                            bool bit1 = (byteValue & (1 << 1)) != 0;
+                            bool bit2 = (byteValue & (1 << 2)) != 0;
+                            bool bit3 = (byteValue & (1 << 3)) != 0;
+                            bool bit4 = (byteValue & (1 << 4)) != 0;
+                            bool bit5 = (byteValue & (1 << 5)) != 0;
+                            bool bit6 = (byteValue & (1 << 6)) != 0;
+                            bool bit7 = (byteValue & (1 << 7)) != 0;
+
+                            hasAlarmPmcA = bit2;
+                            alarmDetail = $"R854 byte=0x{byteValue:X2} (Bits: 7={B(bit7)} 6={B(bit6)} 5={B(bit5)} 4={B(bit4)} 3={B(bit3)} 2={B(bit2)} 1={B(bit1)} 0={B(bit0)})";
+
+                            // 로그 파일에 기록
+                            WriteStateLog($"[{_connection.IpAddress}] {alarmDetail}, 알람판정={hasAlarmPmcA}, 현재상태={_stateTransition.CurrentState}");
+
+                            // 상태 전환 시 특별 로그
+                            if (_stateTransition.CurrentState != MachineState.Alarm && hasAlarmPmcA)
+                            {
+                                WriteStateLog($"[{_connection.IpAddress}] ★★★ 알람 감지! {_stateTransition.CurrentState} -> ALARM ★★★");
+                            }
+                            else if (_stateTransition.CurrentState == MachineState.Alarm && !hasAlarmPmcA)
+                            {
+                                WriteStateLog($"[{_connection.IpAddress}] ★★★ 알람 해제! ALARM -> ? ★★★");
+                            }
                         }
                         else
                         {
                             alarmDetail = $"R854 읽기 실패 (ret={ret854})";
+                            WriteStateLog($"[{_connection.IpAddress}] {alarmDetail}");
                         }
                     }
                     catch (Exception ex)
@@ -497,6 +526,27 @@ namespace FanucFocasTutorial
             catch
             {
                 return false;
+            }
+        }
+
+        private string B(bool value)
+        {
+            return value ? "1" : "0";
+        }
+
+        private void WriteStateLog(string message)
+        {
+            try
+            {
+                lock (_logLock)
+                {
+                    string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+                    File.AppendAllText(_logFilePath, logMessage + Environment.NewLine);
+                }
+            }
+            catch
+            {
+                // 로그 쓰기 실패 시 무시
             }
         }
 
