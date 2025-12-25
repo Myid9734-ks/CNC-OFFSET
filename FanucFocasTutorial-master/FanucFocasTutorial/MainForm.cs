@@ -306,7 +306,7 @@ namespace FanucFocasTutorial
             GroupBox menuGroup = new GroupBox
             {
                 Dock = DockStyle.Bottom,
-                Height = 250,
+                Height = 300,
                 Text = "메뉴",
                 Font = new Font("맑은 고딕", 12f, FontStyle.Bold),
                 Padding = new Padding(10)
@@ -455,6 +455,61 @@ namespace FanucFocasTutorial
                 multiMonitoringForm.BringToFront();
             };
 
+            // 근무조 현황 버튼
+            Button shiftDataButton = new Button
+            {
+                Text = "근무조 현황",
+                Width = 250,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 10
+            };
+            shiftDataButton.Click += (s, e) => {
+                // 기존 폼들 제거
+                var existingAutoOffsetForm = _centerPanel.Controls.OfType<AutoOffsetForm>().FirstOrDefault();
+                if (existingAutoOffsetForm != null)
+                {
+                    existingAutoOffsetForm.StopAutoProcess();
+                    _centerPanel.Controls.Remove(existingAutoOffsetForm);
+                    existingAutoOffsetForm.Dispose();
+                }
+
+                var existingAutoMonitoringForm = _centerPanel.Controls.OfType<AutoMonitoringForm>().FirstOrDefault();
+                if (existingAutoMonitoringForm != null)
+                {
+                    _centerPanel.Controls.Remove(existingAutoMonitoringForm);
+                    existingAutoMonitoringForm.Dispose();
+                }
+
+                var existingMultiMonitoringForm = _centerPanel.Controls.OfType<MultiMonitoringForm>().FirstOrDefault();
+                if (existingMultiMonitoringForm != null)
+                {
+                    _centerPanel.Controls.Remove(existingMultiMonitoringForm);
+                    existingMultiMonitoringForm.Dispose();
+                }
+
+                var existingShiftDataForm = _centerPanel.Controls.OfType<ShiftDataViewForm>().FirstOrDefault();
+                if (existingShiftDataForm != null)
+                {
+                    _centerPanel.Controls.Remove(existingShiftDataForm);
+                    existingShiftDataForm.Dispose();
+                }
+
+                _mainGroupBox.Visible = false;
+                _monitoringGroup.Visible = false;
+
+                // 근무조 현황 폼을 메인 화면에 embedded로 표시
+                var shiftDataForm = new ShiftDataViewForm();
+                shiftDataForm.TopLevel = false;
+                shiftDataForm.FormBorderStyle = FormBorderStyle.None;
+                shiftDataForm.Dock = DockStyle.Fill;
+
+                _centerPanel.Controls.Add(shiftDataForm);
+                shiftDataForm.Show();
+                shiftDataForm.BringToFront();
+            };
+
             // 로그기록 버튼
             Button logRecordButton = new Button
             {
@@ -493,6 +548,7 @@ namespace FanucFocasTutorial
             menuFlow.Controls.Add(manualOffsetButton);
             menuFlow.Controls.Add(autoOffsetButton);
             menuFlow.Controls.Add(autoMonitoringButton);
+            menuFlow.Controls.Add(shiftDataButton);
             menuFlow.Controls.Add(logRecordButton);
             menuGroup.Controls.Add(menuFlow);
             leftPanel.Controls.Add(menuGroup);

@@ -682,5 +682,97 @@ namespace FanucFocasTutorial
 
             return result;
         }
+
+        /// <summary>
+        /// 근무조 데이터 조회 (날짜 범위, IP, 근무조 타입 필터)
+        /// </summary>
+        public List<ShiftStateData> GetShiftDataByFilter(DateTime startDate, DateTime endDate, string ipAddress = null, ShiftType? shiftType = null)
+        {
+            var result = new List<ShiftStateData>();
+
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                string sql = @"
+                    SELECT * FROM ShiftStateLogs
+                    WHERE ShiftDate >= @StartDate AND ShiftDate <= @EndDate";
+
+                if (!string.IsNullOrEmpty(ipAddress))
+                {
+                    sql += " AND IpAddress = @IpAddress";
+                }
+
+                if (shiftType.HasValue)
+                {
+                    sql += " AND ShiftType = @ShiftType";
+                }
+
+                sql += " ORDER BY ShiftDate DESC, IpAddress, ShiftType";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@StartDate", startDate.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@EndDate", endDate.ToString("yyyy-MM-dd"));
+
+                    if (!string.IsNullOrEmpty(ipAddress))
+                    {
+                        cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
+                    }
+
+                    if (shiftType.HasValue)
+                    {
+                        cmd.Parameters.AddWithValue("@ShiftType", shiftType.Value.ToString());
+                    }
+
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            result.Add(new ShiftStateData
+                            {
+                                IpAddress = reader["IpAddress"].ToString(),
+                                ShiftDate = DateTime.Parse(reader["ShiftDate"].ToString()),
+                                ShiftType = (ShiftType)Enum.Parse(typeof(ShiftType), reader["ShiftType"].ToString()),
+                                IsExtended = Convert.ToInt32(reader["IsExtended"]) == 1,
+                                RunningSeconds = Convert.ToInt32(reader["RunningSeconds"]),
+                                LoadingSeconds = Convert.ToInt32(reader["LoadingSeconds"]),
+                                AlarmSeconds = Convert.ToInt32(reader["AlarmSeconds"]),
+                                IdleSeconds = Convert.ToInt32(reader["IdleSeconds"]),
+                                ProductionCount = Convert.ToInt32(reader["ProductionCount"])
+                            });
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 등록된 모든 IP 주소 목록 조회
+        /// </summary>
+        public List<string> GetAllIpAddresses()
+        {
+            var result = new List<string>();
+
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                string sql = "SELECT DISTINCT IpAddress FROM ShiftStateLogs ORDER BY IpAddress";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        result.Add(reader["IpAddress"].ToString());
+                    }
+                }
+            }
+
+            return result;
+        }
     }
 }

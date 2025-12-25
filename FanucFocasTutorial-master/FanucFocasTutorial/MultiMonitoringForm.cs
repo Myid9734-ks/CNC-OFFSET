@@ -33,6 +33,9 @@ namespace FanucFocasTutorial
             InitializeComponent();
             CreateMonitorPanels();
             SetupTimer();
+
+            // 폼 닫힘 이벤트 등록 (근무조 데이터 저장)
+            this.FormClosing += MultiMonitoringForm_FormClosing;
         }
 
         private void InitializeComponent()
@@ -87,9 +90,35 @@ namespace FanucFocasTutorial
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            // 모든 패널의 근무조 데이터 저장
+            SaveAllShiftData();
+
             _updateTimer?.Stop();
             _updateTimer?.Dispose();
             base.OnFormClosing(e);
+        }
+
+        private void MultiMonitoringForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            // FormClosing 이벤트 핸들러 (OnFormClosing에서 처리)
+        }
+
+        /// <summary>
+        /// 모든 설비의 근무조 데이터 저장
+        /// </summary>
+        private void SaveAllShiftData()
+        {
+            foreach (var panel in _monitorPanels.Values)
+            {
+                try
+                {
+                    panel.SaveCurrentShiftData();
+                }
+                catch
+                {
+                    // 저장 실패 시 무시
+                }
+            }
         }
     }
 
@@ -110,6 +139,7 @@ namespace FanucFocasTutorial
         private Dictionary<MachineState, int> _stateDurations;
         private StateTransition _stateTransition;
         private PmcStateValues _currentPmcValues;
+        private ShiftStateData _shiftStateData;  // 근무조 데이터 (DB 저장용)
 
         // 이전 값 캐싱 (깜빡임 방지)
         private string _prevActualWorking = "";
@@ -155,6 +185,9 @@ namespace FanucFocasTutorial
                 CurrentState = MachineState.Idle,
                 ElapsedSeconds = 0
             };
+
+            // 근무조 데이터 초기화 (DB에서 복원 시도)
+            LoadShiftDataFromDb();
 
             InitializeUI();
         }
@@ -379,6 +412,13 @@ namespace FanucFocasTutorial
                             _connection.IncrementProduction();
                         }
 
+                        // 근무조 데이터 업데이트
+                        _shiftStateData.RunningSeconds = _stateDurations[MachineState.Running];
+                        _shiftStateData.LoadingSeconds = _stateDurations[MachineState.Loading];
+                        _shiftStateData.AlarmSeconds = _stateDurations[MachineState.Alarm];
+                        _shiftStateData.IdleSeconds = _stateDurations[MachineState.Idle];
+                        _shiftStateData.ProductionCount = _connection.GetProductionCount();
+
                         _stateTransition.StartTime = DateTime.Now;
                         _stateTransition.CurrentState = currentState;
                         _stateTransition.ElapsedSeconds = 0;
@@ -387,6 +427,9 @@ namespace FanucFocasTutorial
                     {
                         _stateTransition.ElapsedSeconds = (int)(DateTime.Now - _stateTransition.StartTime).TotalSeconds;
                     }
+
+                    // 근무조 전환 감지
+                    CheckAndHandleShiftTransition();
 
                     // UI 업데이트
                     UpdateStateUI(currentState);
@@ -547,6 +590,167 @@ namespace FanucFocasTutorial
             catch
             {
                 // 로그 쓰기 실패 시 무시
+            }
+        }
+
+        /// <summary>
+        /// 근무조 전환 감지 및 처리
+        /// </summary>
+        private void CheckAndHandleShiftTransition()
+        {
+            ShiftInfo newShift = ShiftManager.GetCurrentShift(DateTime.Now);
+
+            // 근무조 변경 감지
+            if (ShiftManager.IsShiftChanged(_currentShift, newShift))
+            {
+                // 현재 근무조 데이터 저장
+                SaveShiftData();
+
+                // 새 근무조로 전환
+                _currentShift = newShift;
+
+                // 상태 추적 초기화
+                _stateDurations[MachineState.Running] = 0;
+                _stateDurations[MachineState.Loading] = 0;
+                _stateDurations[MachineState.Alarm] = 0;
+                _stateDurations[MachineState.Idle] = 0;
+
+                // 근무조 데이터 초기화
+                _shiftStateData = new ShiftStateData
+                {
+                    IpAddress = _connection.IpAddress,
+                    ShiftType = newShift.Type,
+                    ShiftDate = newShift.StartTime.Date,
+                    IsExtended = newShift.IsExtended,
+                    RunningSeconds = 0,
+                    LoadingSeconds = 0,
+                    AlarmSeconds = 0,
+                    IdleSeconds = 0,
+                    ProductionCount = 0
+                };
+
+                // 생산수량 초기화
+                _connection.ResetProductionCount();
+
+                // UI 업데이트
+                if (_lblShiftInfo != null)
+                {
+                    _lblShiftInfo.Text = ShiftManager.GetShiftDisplayName(newShift);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 현재 근무조 데이터 DB 저장
+        /// </summary>
+        private void SaveShiftData()
+        {
+            try
+            {
+                // 현재 상태의 누적 시간 최종 반영
+                _shiftStateData.RunningSeconds = _stateDurations[MachineState.Running];
+                _shiftStateData.LoadingSeconds = _stateDurations[MachineState.Loading];
+                _shiftStateData.AlarmSeconds = _stateDurations[MachineState.Alarm];
+                _shiftStateData.IdleSeconds = _stateDurations[MachineState.Idle];
+                _shiftStateData.ProductionCount = _connection.GetProductionCount();
+
+                // DB 저장
+                var logService = new LogDataService();
+                logService.SaveShiftStateData(_shiftStateData);
+
+                WriteStateLog($"[{_connection.IpAddress}] ★★★ 근무조 데이터 저장 완료 ★★★ " +
+                    $"실가공={FormatDuration(_shiftStateData.RunningSeconds)}, " +
+                    $"투입={FormatDuration(_shiftStateData.LoadingSeconds)}, " +
+                    $"알람={FormatDuration(_shiftStateData.AlarmSeconds)}, " +
+                    $"유휴={FormatDuration(_shiftStateData.IdleSeconds)}, " +
+                    $"생산={_shiftStateData.ProductionCount}개");
+            }
+            catch (Exception ex)
+            {
+                WriteStateLog($"[{_connection.IpAddress}] 근무조 데이터 저장 실패: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 수동으로 근무조 데이터 저장 (외부 호출용)
+        /// </summary>
+        public void SaveCurrentShiftData()
+        {
+            SaveShiftData();
+        }
+
+        /// <summary>
+        /// DB에서 오늘 현재 근무조의 누적 데이터 복원
+        /// </summary>
+        private void LoadShiftDataFromDb()
+        {
+            try
+            {
+                var logService = new LogDataService();
+                var savedData = logService.LoadShiftStateData(
+                    _connection.IpAddress,
+                    _currentShift.StartTime.Date,
+                    _currentShift.Type);
+
+                if (savedData != null)
+                {
+                    // DB에서 복원
+                    _shiftStateData = savedData;
+                    _stateDurations[MachineState.Running] = savedData.RunningSeconds;
+                    _stateDurations[MachineState.Loading] = savedData.LoadingSeconds;
+                    _stateDurations[MachineState.Alarm] = savedData.AlarmSeconds;
+                    _stateDurations[MachineState.Idle] = savedData.IdleSeconds;
+
+                    // 생산 수량도 복원
+                    _connection.ResetProductionCount();
+                    for (int i = 0; i < savedData.ProductionCount; i++)
+                    {
+                        _connection.IncrementProduction();
+                    }
+
+                    WriteStateLog($"[{_connection.IpAddress}] DB에서 근무조 데이터 복원 완료: " +
+                        $"실가공={FormatDuration(savedData.RunningSeconds)}, " +
+                        $"투입={FormatDuration(savedData.LoadingSeconds)}, " +
+                        $"알람={FormatDuration(savedData.AlarmSeconds)}, " +
+                        $"유휴={FormatDuration(savedData.IdleSeconds)}, " +
+                        $"생산={savedData.ProductionCount}개");
+                }
+                else
+                {
+                    // DB에 데이터 없음 - 새로 시작
+                    _shiftStateData = new ShiftStateData
+                    {
+                        IpAddress = _connection.IpAddress,
+                        ShiftType = _currentShift.Type,
+                        ShiftDate = _currentShift.StartTime.Date,
+                        IsExtended = _currentShift.IsExtended,
+                        RunningSeconds = 0,
+                        LoadingSeconds = 0,
+                        AlarmSeconds = 0,
+                        IdleSeconds = 0,
+                        ProductionCount = 0
+                    };
+
+                    WriteStateLog($"[{_connection.IpAddress}] 새 근무조 시작");
+                }
+            }
+            catch (Exception ex)
+            {
+                // DB 복원 실패 시 0으로 시작
+                _shiftStateData = new ShiftStateData
+                {
+                    IpAddress = _connection.IpAddress,
+                    ShiftType = _currentShift.Type,
+                    ShiftDate = _currentShift.StartTime.Date,
+                    IsExtended = _currentShift.IsExtended,
+                    RunningSeconds = 0,
+                    LoadingSeconds = 0,
+                    AlarmSeconds = 0,
+                    IdleSeconds = 0,
+                    ProductionCount = 0
+                };
+
+                WriteStateLog($"[{_connection.IpAddress}] DB 복원 실패, 0으로 시작: {ex.Message}");
             }
         }
 
