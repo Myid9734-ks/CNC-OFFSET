@@ -1,0 +1,45 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RootNamespace>FanucFocasTutorial</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <PlatformTarget>x86</PlatformTarget>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="FanucFocasTutorial-master\FanucFocasTutorial\bin\**" />
+    <Compile Remove="FanucFocasTutorial-master\FanucFocasTutorial\obj\**" />
+    <Compile Remove="FanucFocasTutorial-master\FanucFocasTutorial\fwlib64.cs" />
+    <Compile Remove="CompensationTest\**" />
+    <Compile Remove="CompensationLogicTest.cs" />
+    <EmbeddedResource Remove="FanucFocasTutorial-master\FanucFocasTutorial\bin\**" />
+    <EmbeddedResource Remove="FanucFocasTutorial-master\FanucFocasTutorial\obj\**" />
+    <EmbeddedResource Remove="CompensationTest\**" />
+    <None Remove="FanucFocasTutorial-master\FanucFocasTutorial\bin\**" />
+    <None Remove="FanucFocasTutorial-master\FanucFocasTutorial\obj\**" />
+    <None Remove="CompensationTest\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="9.0.0" />
+    <PackageReference Include="System.Data.SQLite" Version="1.0.119" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <!-- Fanuc FOCAS 라이브러리 자동 복사 -->
+  <ItemGroup>
+    <None Include="libs\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build)",
+      "Bash(dotnet clean:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet run:*)",
+      "Bash(dir)",
+      "WebFetch(domain:www.inventcom.net)",
+      "Bash(dotnet build:*)",
+      "Bash(dir:*)",
+      "Bash(csc:*)",
+      "Bash(CompensationLogicTest.exe)",
+      "Bash(dotnet new:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(start FanucFocasTutorial.exe)",
+      "Bash(ls:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd.exe /c \"taskkill /F /PID 50612\")",
+      "Bash(cmd.exe /c \"dir /B \"\"C:\\\\Users\\\\일광금속-측정실2\\\\Desktop\\\\net9.0-windows\\\\*.dll\"\"\")",
+      "Bash(cmd.exe /c dir \"C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\bin\\\\Debug\\\\net9.0-windows\\\\*.dll\" /B)",
+      "Bash(cmd.exe /c \"taskkill /F /IM FanucFocasTutorial-master.exe\")",
+      "Bash(Select-String -Pattern \"error|warning|성공|실패\")",
+      "Bash(Select-Object -First 20)",
+      "Bash(find:*)",
+      "Bash(.dll \")",
+      "Bash(Select-String -Pattern \"error|warning|빌드했습니다\")",
+      "Bash(Select-Object -First 5)",
+      "Bash(cmd.exe /c \"dir /B C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\FanucFocasTutorial-master\\\\FanucFocasTutorial\\\\bin\\\\Debug\":*)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
