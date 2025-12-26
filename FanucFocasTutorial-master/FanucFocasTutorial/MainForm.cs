@@ -436,8 +436,20 @@ namespace FanucFocasTutorial
                 _mainGroupBox.Visible = false;
                 _monitoringGroup.Visible = false;
 
-                // 등록된 모든 설비 수집
-                var allConnections = _connectionManager.GetAllConnections().ToList();
+                // IP 관리 목록 순서대로 설비 수집
+                var allConnections = new List<CNCConnection>();
+                var connectionDict = _connectionManager.GetAllConnections().ToDictionary(c => c.IpAddress);
+
+                foreach (var item in _ipList.Items)
+                {
+                    string ipPort = item.ToString();
+                    string ip = ipPort.Split(':')[0];
+
+                    if (connectionDict.ContainsKey(ip))
+                    {
+                        allConnections.Add(connectionDict[ip]);
+                    }
+                }
 
                 if (allConnections.Count == 0)
                 {

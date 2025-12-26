@@ -167,6 +167,10 @@ namespace FanucFocasTutorial
         private TableLayoutPanel _pnlInput;
         private TableLayoutPanel _pnlAlarm;
         private TableLayoutPanel _pnlIdle;
+        private Label _lblActualWorking;  // 상태 라벨 (색상 변경용)
+        private Label _lblInput;
+        private Label _lblAlarm;
+        private Label _lblIdle;
         private Label _lblActualWorkingTime;
         private Label _lblInputTime;
         private Label _lblAlarmTime;
@@ -199,6 +203,17 @@ namespace FanucFocasTutorial
             LoadShiftDataFromDb();
 
             InitializeUI();
+        }
+
+        // WS_EX_COMPOSITED 스타일 적용 (깜박임 방지)
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x02000000;  // WS_EX_COMPOSITED
+                return cp;
+            }
         }
 
         private void InitializeUI()
@@ -255,10 +270,10 @@ namespace FanucFocasTutorial
             }
 
             // Row 0: 통합 지표 (5개 카드)
-            _pnlActualWorking = CreateMetricCard("가공", "00:00:00", Color.LightGray, out _lblActualWorkingTime);
-            _pnlInput = CreateMetricCard("투입", "00:00:00", Color.LightGray, out _lblInputTime);
-            _pnlAlarm = CreateMetricCard("알람", "00:00:00", Color.LightGray, out _lblAlarmTime);
-            _pnlIdle = CreateMetricCard("유휴", "00:00:00", Color.LightGray, out _lblIdleTime);
+            _pnlActualWorking = CreateMetricCard("가공", "00:00:00", Color.LightGray, out _lblActualWorking, out _lblActualWorkingTime);
+            _pnlInput = CreateMetricCard("투입", "00:00:00", Color.LightGray, out _lblInput, out _lblInputTime);
+            _pnlAlarm = CreateMetricCard("알람", "00:00:00", Color.LightGray, out _lblAlarm, out _lblAlarmTime);
+            _pnlIdle = CreateMetricCard("유휴", "00:00:00", Color.LightGray, out _lblIdle, out _lblIdleTime);
 
             // 가동률 + 생산수량을 하나의 패널에
             var metricsPanel = new TableLayoutPanel
@@ -288,7 +303,7 @@ namespace FanucFocasTutorial
             this.Controls.Add(_lblHeader);
         }
 
-        private TableLayoutPanel CreateMetricCard(string labelText, string timeText, Color backColor, out Label timeLabel)
+        private TableLayoutPanel CreateMetricCard(string labelText, string timeText, Color backColor, out Label stateLabel, out Label timeLabel)
         {
             var panel = new TableLayoutPanel
             {
@@ -300,7 +315,7 @@ namespace FanucFocasTutorial
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 40F));  // 라벨
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 60F));  // 시간
 
-            var label = new Label
+            stateLabel = new Label
             {
                 Text = labelText,
                 Font = new Font("맑은 고딕", 11f, FontStyle.Bold),
@@ -315,10 +330,10 @@ namespace FanucFocasTutorial
                 Font = new Font("Consolas", 14f, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Dock = DockStyle.Fill,
-                BackColor = Color.White  // 타이머는 항상 흰색
+                BackColor = Color.Transparent  // 투명 (깜박임 방지)
             };
 
-            panel.Controls.Add(label, 0, 0);
+            panel.Controls.Add(stateLabel, 0, 0);
             panel.Controls.Add(timeLabel, 0, 1);
 
             return panel;
@@ -467,6 +482,8 @@ namespace FanucFocasTutorial
 
         private void UpdateStateUI(MachineState currentState)
         {
+            this.SuspendLayout();  // 레이아웃 업데이트 일시 중지 (깜박임 방지)
+
             // 현재 상태 시간 포함
             int runningTotal = _stateDurations[MachineState.Running] + (currentState == MachineState.Running ? _stateTransition.ElapsedSeconds : 0);
             int loadingTotal = _stateDurations[MachineState.Loading] + (currentState == MachineState.Loading ? _stateTransition.ElapsedSeconds : 0);
@@ -490,26 +507,26 @@ namespace FanucFocasTutorial
             int productionCount = _connection.GetProductionCount();
             string productionText = $"생산: {productionCount}개";
 
-            // 카드 색상 초기화
-            _pnlActualWorking.BackColor = Color.LightGray;
-            _pnlInput.BackColor = Color.LightGray;
-            _pnlAlarm.BackColor = Color.LightGray;
-            _pnlIdle.BackColor = Color.LightGray;
+            // 카드 라벨 색상 초기화 (모두 회색)
+            _lblActualWorking.BackColor = Color.LightGray;
+            _lblInput.BackColor = Color.LightGray;
+            _lblAlarm.BackColor = Color.LightGray;
+            _lblIdle.BackColor = Color.LightGray;
 
-            // 현재 상태에 따라 카드 강조
+            // 현재 상태에 따라 해당 라벨만 강조
             switch (currentState)
             {
                 case MachineState.Running:
-                    _pnlActualWorking.BackColor = Color.FromArgb(76, 175, 80);  // 녹색
+                    _lblActualWorking.BackColor = Color.FromArgb(76, 175, 80);  // 녹색
                     break;
                 case MachineState.Loading:
-                    _pnlInput.BackColor = Color.FromArgb(255, 193, 7);  // 노란색
+                    _lblInput.BackColor = Color.FromArgb(255, 193, 7);  // 노란색
                     break;
                 case MachineState.Alarm:
-                    _pnlAlarm.BackColor = Color.FromArgb(244, 67, 54);  // 빨간색
+                    _lblAlarm.BackColor = Color.FromArgb(244, 67, 54);  // 빨간색
                     break;
                 case MachineState.Idle:
-                    _pnlIdle.BackColor = Color.FromArgb(158, 158, 158);  // 회색
+                    _lblIdle.BackColor = Color.FromArgb(158, 158, 158);  // 회색
                     break;
             }
 
@@ -544,6 +561,8 @@ namespace FanucFocasTutorial
                 _lblProduction.Text = productionText;
                 _prevProduction = productionText;
             }
+
+            this.ResumeLayout();  // 레이아웃 업데이트 재개
         }
 
         private bool ReadPmcStateValues(out PmcStateValues values)
