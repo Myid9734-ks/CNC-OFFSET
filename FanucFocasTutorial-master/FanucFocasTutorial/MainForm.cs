@@ -448,7 +448,7 @@ namespace FanucFocasTutorial
                 // 백그라운드 모니터링 폼 재사용 또는 새로 생성
                 if (_backgroundMonitoringForm == null || _backgroundMonitoringForm.IsDisposed)
                 {
-                    _backgroundMonitoringForm = new MultiMonitoringForm(allConnections);
+                    _backgroundMonitoringForm = new MultiMonitoringForm(allConnections, _ipAliases);
                     _backgroundMonitoringForm.TopLevel = false;
                     _backgroundMonitoringForm.FormBorderStyle = FormBorderStyle.None;
                     _backgroundMonitoringForm.Dock = DockStyle.Fill;

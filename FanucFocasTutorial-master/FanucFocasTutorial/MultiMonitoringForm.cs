@@ -17,10 +17,12 @@ namespace FanucFocasTutorial
         private FlowLayoutPanel _mainLayout;
         private System.Windows.Forms.Timer _updateTimer;
         private Dictionary<string, EquipmentMonitorPanel> _monitorPanels;
+        private Dictionary<string, string> _ipAliases;
 
-        public MultiMonitoringForm(List<CNCConnection> connections)
+        public MultiMonitoringForm(List<CNCConnection> connections, Dictionary<string, string> ipAliases = null)
         {
             _connections = connections;
+            _ipAliases = ipAliases ?? new Dictionary<string, string>();
             _monitorPanels = new Dictionary<string, EquipmentMonitorPanel>();
 
             // 깜빡임 방지
@@ -64,7 +66,12 @@ namespace FanucFocasTutorial
             {
                 if (connection == null) continue;
 
-                var panel = new EquipmentMonitorPanel(connection);
+                // 별칭 가져오기 (없으면 null)
+                string alias = _ipAliases.ContainsKey(connection.IpAddress)
+                    ? _ipAliases[connection.IpAddress]
+                    : null;
+
+                var panel = new EquipmentMonitorPanel(connection, alias);
                 _monitorPanels[connection.IpAddress] = panel;
                 _mainLayout.Controls.Add(panel);
             }
@@ -133,6 +140,7 @@ namespace FanucFocasTutorial
         private static readonly object _logLock = new object();
 
         private CNCConnection _connection;
+        private string _alias;
 
         // 근무조 관리
         private ShiftInfo _currentShift;
@@ -166,9 +174,10 @@ namespace FanucFocasTutorial
         private Label _lblOperationRate;
         private Label _lblProduction;
 
-        public EquipmentMonitorPanel(CNCConnection connection)
+        public EquipmentMonitorPanel(CNCConnection connection, string alias = null)
         {
             _connection = connection;
+            _alias = alias;
 
             // 근무조 초기화
             _currentShift = ShiftManager.GetCurrentShift(DateTime.Now);
@@ -198,11 +207,13 @@ namespace FanucFocasTutorial
             this.Size = new Size(720, 180);  // 높이 감소
             this.Margin = new Padding(8, 8, 8, 8);  // 패널 간 간격
             this.Font = new Font("맑은 고딕", 9.5f);  // 폰트 약간 증가
+            this.DoubleBuffered = true;  // 깜박임 방지
 
-            // 헤더 (IP + 시간)
+            // 헤더 (별칭 또는 IP + 시간)
+            string displayName = string.IsNullOrWhiteSpace(_alias) ? _connection.IpAddress : $"{_alias} ({_connection.IpAddress})";
             _lblHeader = new Label
             {
-                Text = $"{_connection.IpAddress} | {DateTime.Now:HH:mm:ss}",
+                Text = $"{displayName} | {DateTime.Now:HH:mm:ss}",
                 Font = new Font("맑은 고딕", 11f, FontStyle.Bold),  // 폰트 증가
                 Dock = DockStyle.Top,
                 Height = 32,  // 높이 약간 증가
@@ -244,7 +255,7 @@ namespace FanucFocasTutorial
             }
 
             // Row 0: 통합 지표 (5개 카드)
-            _pnlActualWorking = CreateMetricCard("실가공", "00:00:00", Color.LightGray, out _lblActualWorkingTime);
+            _pnlActualWorking = CreateMetricCard("가공", "00:00:00", Color.LightGray, out _lblActualWorkingTime);
             _pnlInput = CreateMetricCard("투입", "00:00:00", Color.LightGray, out _lblInputTime);
             _pnlAlarm = CreateMetricCard("알람", "00:00:00", Color.LightGray, out _lblAlarmTime);
             _pnlIdle = CreateMetricCard("유휴", "00:00:00", Color.LightGray, out _lblIdleTime);
@@ -284,7 +295,7 @@ namespace FanucFocasTutorial
                 Dock = DockStyle.Fill,
                 RowCount = 2,
                 ColumnCount = 1,
-                BackColor = backColor
+                BackColor = Color.Transparent
             };
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 40F));  // 라벨
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 60F));  // 시간
@@ -295,7 +306,7 @@ namespace FanucFocasTutorial
                 Font = new Font("맑은 고딕", 11f, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Dock = DockStyle.Fill,
-                BackColor = Color.Transparent
+                BackColor = backColor  // 라벨만 색상 적용
             };
 
             timeLabel = new Label
@@ -304,7 +315,7 @@ namespace FanucFocasTutorial
                 Font = new Font("Consolas", 14f, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Dock = DockStyle.Fill,
-                BackColor = Color.Transparent
+                BackColor = Color.White  // 타이머는 항상 흰색
             };
 
             panel.Controls.Add(label, 0, 0);
@@ -330,7 +341,8 @@ namespace FanucFocasTutorial
         {
             if (_connection == null || !_connection.IsConnected)
             {
-                _lblHeader.Text = $"{_connection?.IpAddress ?? "N/A"} | 연결 안됨";
+                string displayName = string.IsNullOrWhiteSpace(_alias) ? (_connection?.IpAddress ?? "N/A") : $"{_alias} ({_connection?.IpAddress ?? "N/A"})";
+                _lblHeader.Text = $"{displayName} | 연결 안됨";
                 _lblHeader.BackColor = Color.Gray;
                 return;
             }
@@ -338,7 +350,8 @@ namespace FanucFocasTutorial
             try
             {
                 // 헤더 업데이트
-                _lblHeader.Text = $"{_connection.IpAddress} | {DateTime.Now:HH:mm:ss}";
+                string displayName = string.IsNullOrWhiteSpace(_alias) ? _connection.IpAddress : $"{_alias} ({_connection.IpAddress})";
+                _lblHeader.Text = $"{displayName} | {DateTime.Now:HH:mm:ss}";
 
                 // PMC 값 읽기 및 상태 판별
                 if (ReadPmcStateValues(out PmcStateValues pmc))
@@ -427,6 +440,17 @@ namespace FanucFocasTutorial
                     {
                         _stateTransition.ElapsedSeconds = (int)(DateTime.Now - _stateTransition.StartTime).TotalSeconds;
                     }
+
+                    // 현재 진행 중인 시간을 포함하여 근무조 데이터 매번 업데이트
+                    _shiftStateData.RunningSeconds = _stateDurations[MachineState.Running] +
+                        (currentState == MachineState.Running ? _stateTransition.ElapsedSeconds : 0);
+                    _shiftStateData.LoadingSeconds = _stateDurations[MachineState.Loading] +
+                        (currentState == MachineState.Loading ? _stateTransition.ElapsedSeconds : 0);
+                    _shiftStateData.AlarmSeconds = _stateDurations[MachineState.Alarm] +
+                        (currentState == MachineState.Alarm ? _stateTransition.ElapsedSeconds : 0);
+                    _shiftStateData.IdleSeconds = _stateDurations[MachineState.Idle] +
+                        (currentState == MachineState.Idle ? _stateTransition.ElapsedSeconds : 0);
+                    _shiftStateData.ProductionCount = _connection.GetProductionCount();
 
                     // 근무조 전환 감지
                     CheckAndHandleShiftTransition();
@@ -632,11 +656,17 @@ namespace FanucFocasTutorial
                 // 생산수량 초기화
                 _connection.ResetProductionCount();
 
+                // 상태 전환 시작 시간 초기화 (UI 시간 표시 초기화)
+                _stateTransition.StartTime = DateTime.Now;
+                _stateTransition.ElapsedSeconds = 0;
+
                 // UI 업데이트
                 if (_lblShiftInfo != null)
                 {
                     _lblShiftInfo.Text = ShiftManager.GetShiftDisplayName(newShift);
                 }
+
+                WriteStateLog($"[{_connection.IpAddress}] 근무조 전환: {_currentShift.Type} → {newShift.Type}, UI 시간 초기화");
             }
         }
 
