@@ -26,9 +26,11 @@ namespace FanucFocasTutorial
         private Dictionary<string, bool> _connectionStates;
         private Dictionary<string, Color> _ipGridColors;
         private Dictionary<string, string> _ipAliases; // IP별 별칭 저장
+        private Dictionary<string, int> _ipLoadingMCodes; // IP별 로딩 M코드 저장
         private ListBox _ipList;
         private TextBox _ipInputBox;
         private TextBox _aliasInputBox; // 별칭 입력란
+        private TextBox _mcodeInputBox; // M코드 입력란
         private Button _registerButton; // 등록/수정 버튼
         private const int DEFAULT_TIMEOUT = 2;
         private CNCConnection _currentConnection;
@@ -117,6 +119,7 @@ namespace FanucFocasTutorial
             _connectionStates = new Dictionary<string, bool>();
             _ipGridColors = new Dictionary<string, Color>();
             _ipAliases = new Dictionary<string, string>(); // 별칭 딕셔너리 초기화
+            _ipLoadingMCodes = new Dictionary<string, int>(); // 로딩 M코드 딕셔너리 초기화
             _macroDataService = new MacroDataService(); // DB 서비스 초기화
             _logDataService = new LogDataService(); // 로그 DB 서비스 초기화
             _syncIndexPerIp = new Dictionary<string, int>(); // IP별 동기화 인덱스 초기화
@@ -185,7 +188,7 @@ namespace FanucFocasTutorial
                 Text = "설비 별칭 (선택사항, 예: #10 장비)",
                 ForeColor = Color.Gray,
                 Margin = new Padding(0, 0, 0, 3),
-                TabIndex = 2
+                TabIndex = 1
             };
             _aliasInputBox.GotFocus += (s, e) => {
                 if (_aliasInputBox.Text == "설비 별칭 (선택사항, 예: #10 장비)")
@@ -202,6 +205,39 @@ namespace FanucFocasTutorial
                 }
             };
 
+            // M코드 입력 텍스트박스
+            _mcodeInputBox = new TextBox
+            {
+                Dock = DockStyle.Top,
+                Height = 35,
+                Font = new Font("맑은 고딕", 11f),
+                Text = "로딩 M코드 (숫자만, 예: 140)",
+                ForeColor = Color.Gray,
+                Margin = new Padding(0, 0, 0, 3),
+                TabIndex = 3
+            };
+            _mcodeInputBox.GotFocus += (s, e) => {
+                if (_mcodeInputBox.Text == "로딩 M코드 (숫자만, 예: 140)")
+                {
+                    _mcodeInputBox.Text = "";
+                    _mcodeInputBox.ForeColor = Color.Black;
+                }
+            };
+            _mcodeInputBox.LostFocus += (s, e) => {
+                if (string.IsNullOrWhiteSpace(_mcodeInputBox.Text))
+                {
+                    _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
+                    _mcodeInputBox.ForeColor = Color.Gray;
+                }
+            };
+            // 숫자만 입력 가능하도록 설정
+            _mcodeInputBox.KeyPress += (s, e) => {
+                if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+                {
+                    e.Handled = true;
+                }
+            };
+
             // IP 입력 텍스트박스
             _ipInputBox = new TextBox
             {
@@ -210,7 +246,7 @@ namespace FanucFocasTutorial
                 Font = new Font("맑은 고딕", 12f),
                 Text = "IP:포트 (예: 192.168.0.100:8193)",
                 Margin = new Padding(0, 0, 0, 5),
-                TabIndex = 3
+                TabIndex = 2
             };
             _ipInputBox.GotFocus += (s, e) => {
                 if (_ipInputBox.Text == "IP:포트 (예: 192.168.0.100:8193)")
@@ -241,7 +277,7 @@ namespace FanucFocasTutorial
                 ItemHeight = 30,
                 Font = new Font("맑은 고딕", 12f),
                 Margin = new Padding(0, 0, 0, 5),  // 5픽셀 간격
-                TabIndex = 1
+                TabIndex = 0
             };
             _ipList.DrawItem += IpList_DrawItem;
             _ipList.SelectedIndexChanged += IpList_SelectedIndexChanged;
@@ -288,6 +324,9 @@ namespace FanucFocasTutorial
             Label spacer3 = new Label { Height = 5, Dock = DockStyle.Top };
             Label spacer4 = new Label { Height = 5, Dock = DockStyle.Top };
 
+            Label spacer5 = new Label { Height = 5, Dock = DockStyle.Top };
+            Label spacer6 = new Label { Height = 5, Dock = DockStyle.Top };
+
             ipManageGroup.Controls.AddRange(new Control[] {
                 clearButton,
                 spacer3,
@@ -295,9 +334,12 @@ namespace FanucFocasTutorial
                 spacer2,
                 _registerButton,
                 spacer1,
-                _ipInputBox,
-                _aliasInputBox, // 별칭 입력란 추가
+                _mcodeInputBox, // M코드 입력란 (3번째)
+                spacer5,
+                _ipInputBox,    // IP 입력란 (2번째)
                 spacer4,
+                _aliasInputBox, // 별칭 입력란 (1번째)
+                spacer6,
                 _ipList
             });
 
@@ -460,7 +502,7 @@ namespace FanucFocasTutorial
                 // 백그라운드 모니터링 폼 재사용 또는 새로 생성
                 if (_backgroundMonitoringForm == null || _backgroundMonitoringForm.IsDisposed)
                 {
-                    _backgroundMonitoringForm = new MultiMonitoringForm(allConnections, _ipAliases);
+                    _backgroundMonitoringForm = new MultiMonitoringForm(allConnections, _ipAliases, _ipLoadingMCodes);
                     _backgroundMonitoringForm.TopLevel = false;
                     _backgroundMonitoringForm.FormBorderStyle = FormBorderStyle.None;
                     _backgroundMonitoringForm.Dock = DockStyle.Fill;
@@ -537,7 +579,7 @@ namespace FanucFocasTutorial
                 Height = 40,
                 Font = new Font("맑은 고딕", 12f),
                 Margin = new Padding(0, 0, 0, 5),
-                TabIndex = 10
+                TabIndex = 11
             };
             logRecordButton.Click += (s, e) => {
                 // AutoOffsetForm, AutoMonitoringForm은 제거
@@ -1296,6 +1338,7 @@ namespace FanucFocasTutorial
             public ushort Port { get; set; }
             public string ColorHex { get; set; }
             public string Alias { get; set; } // 설비 별칭 추가
+            public int LoadingMCode { get; set; } // 로딩 M코드 추가
 
             public IPConfig() { } // XML 직렬화를 위한 기본 생성자
         }
@@ -1367,6 +1410,9 @@ namespace FanucFocasTutorial
                             {
                                 _ipAliases[config.IpAddress] = config.Alias;
                             }
+
+                            // 저장된 M코드 복원 (0 포함 - 0은 자동화 없음을 의미)
+                            _ipLoadingMCodes[config.IpAddress] = config.LoadingMCode;
                         }
                     }
 
@@ -1439,13 +1485,15 @@ namespace FanucFocasTutorial
                         string colorHex = _ipGridColors.ContainsKey(ip) ?
                             ColorTranslator.ToHtml(_ipGridColors[ip]) : "";
                         string alias = _ipAliases.ContainsKey(ip) ? _ipAliases[ip] : ""; // 별칭 가져오기
+                        int loadingMCode = _ipLoadingMCodes.ContainsKey(ip) ? _ipLoadingMCodes[ip] : 0; // M코드 가져오기
 
                         configList.Configs.Add(new IPConfig
                         {
                             IpAddress = ip,
                             Port = port,
                             ColorHex = colorHex,
-                            Alias = alias // 별칭 저장
+                            Alias = alias, // 별칭 저장
+                            LoadingMCode = loadingMCode // M코드 저장
                         });
                     }
                 }
@@ -2053,6 +2101,23 @@ namespace FanucFocasTutorial
                     _ipAliases[newIp] = alias;
                 }
 
+                // M코드 처리 (기존 IP의 M코드 제거)
+                _ipLoadingMCodes.Remove(oldIp);
+
+                string mcodeText = _mcodeInputBox.Text.Trim();
+                if (mcodeText != "로딩 M코드 (숫자만, 예: 140)")
+                {
+                    if (string.IsNullOrWhiteSpace(mcodeText))
+                    {
+                        // 빈값은 0으로 저장 (자동화 없음)
+                        _ipLoadingMCodes[newIp] = 0;
+                    }
+                    else if (int.TryParse(mcodeText, out int mcode))
+                    {
+                        _ipLoadingMCodes[newIp] = mcode;
+                    }
+                }
+
                 // 리스트 항목 업데이트
                 int selectedIndex = _ipList.SelectedIndex;
                 _ipList.Items[selectedIndex] = $"{newIp}:{newPort}";
@@ -2061,6 +2126,8 @@ namespace FanucFocasTutorial
                 _ipInputBox.Clear();
                 _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
                 _aliasInputBox.ForeColor = Color.Gray;
+                _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
+                _mcodeInputBox.ForeColor = Color.Gray;
 
                 // 저장 및 화면 갱신
                 SaveIPsToFile();
@@ -2095,10 +2162,27 @@ namespace FanucFocasTutorial
                     _ipAliases[newIp] = alias;
                 }
 
+                // M코드 처리
+                string mcodeText = _mcodeInputBox.Text.Trim();
+                if (mcodeText != "로딩 M코드 (숫자만, 예: 140)")
+                {
+                    if (string.IsNullOrWhiteSpace(mcodeText))
+                    {
+                        // 빈값은 0으로 저장 (자동화 없음)
+                        _ipLoadingMCodes[newIp] = 0;
+                    }
+                    else if (int.TryParse(mcodeText, out int mcode))
+                    {
+                        _ipLoadingMCodes[newIp] = mcode;
+                    }
+                }
+
                 _ipList.Items.Add($"{newIp}:{newPort}");
                 _ipInputBox.Clear();
                 _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
                 _aliasInputBox.ForeColor = Color.Gray;
+                _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
+                _mcodeInputBox.ForeColor = Color.Gray;
 
                 var connection = _connectionManager.GetConnection(newIp);
                 if (connection.Connect())
@@ -2190,6 +2274,8 @@ namespace FanucFocasTutorial
                 _ipInputBox.Clear();
                 _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
                 _aliasInputBox.ForeColor = Color.Gray;
+                _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
+                _mcodeInputBox.ForeColor = Color.Gray;
                 _registerButton.Text = "등록"; // 버튼 텍스트를 "등록"으로 변경
                 return;
             }
@@ -2211,6 +2297,18 @@ namespace FanucFocasTutorial
             {
                 _aliasInputBox.Text = "";
                 _aliasInputBox.ForeColor = Color.Black;
+            }
+
+            // 선택된 IP의 로딩 M코드를 입력란에 표시
+            if (_ipLoadingMCodes.ContainsKey(ip))
+            {
+                _mcodeInputBox.Text = _ipLoadingMCodes[ip].ToString();
+                _mcodeInputBox.ForeColor = Color.Black;
+            }
+            else
+            {
+                _mcodeInputBox.Text = "";
+                _mcodeInputBox.ForeColor = Color.Black;
             }
 
             // 버튼 텍스트를 "수정"으로 변경

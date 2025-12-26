@@ -18,11 +18,13 @@ namespace FanucFocasTutorial
         private System.Windows.Forms.Timer _updateTimer;
         private Dictionary<string, EquipmentMonitorPanel> _monitorPanels;
         private Dictionary<string, string> _ipAliases;
+        private Dictionary<string, int> _ipLoadingMCodes;
 
-        public MultiMonitoringForm(List<CNCConnection> connections, Dictionary<string, string> ipAliases = null)
+        public MultiMonitoringForm(List<CNCConnection> connections, Dictionary<string, string> ipAliases = null, Dictionary<string, int> ipLoadingMCodes = null)
         {
             _connections = connections;
             _ipAliases = ipAliases ?? new Dictionary<string, string>();
+            _ipLoadingMCodes = ipLoadingMCodes ?? new Dictionary<string, int>();
             _monitorPanels = new Dictionary<string, EquipmentMonitorPanel>();
 
             // 깜빡임 방지
@@ -71,7 +73,12 @@ namespace FanucFocasTutorial
                     ? _ipAliases[connection.IpAddress]
                     : null;
 
-                var panel = new EquipmentMonitorPanel(connection, alias);
+                // M코드 가져오기 (없으면 0 기본값 - 자동화 없음)
+                int loadingMCode = _ipLoadingMCodes.ContainsKey(connection.IpAddress)
+                    ? _ipLoadingMCodes[connection.IpAddress]
+                    : 0;
+
+                var panel = new EquipmentMonitorPanel(connection, alias, loadingMCode);
                 _monitorPanels[connection.IpAddress] = panel;
                 _mainLayout.Controls.Add(panel);
             }
@@ -141,6 +148,7 @@ namespace FanucFocasTutorial
 
         private CNCConnection _connection;
         private string _alias;
+        private int _loadingMCode;
 
         // 근무조 관리
         private ShiftInfo _currentShift;
@@ -178,10 +186,11 @@ namespace FanucFocasTutorial
         private Label _lblOperationRate;
         private Label _lblProduction;
 
-        public EquipmentMonitorPanel(CNCConnection connection, string alias = null)
+        public EquipmentMonitorPanel(CNCConnection connection, string alias = null, int loadingMCode = 140)
         {
             _connection = connection;
             _alias = alias;
+            _loadingMCode = loadingMCode;
 
             // 근무조 초기화
             _currentShift = ShiftManager.GetCurrentShift(DateTime.Now);
@@ -832,8 +841,9 @@ namespace FanucFocasTutorial
             if (pmc.F1_0 || hasAlarmCnc)
                 return MachineState.Alarm;
 
-            // 투입중: 스타트 실행 중 AND 메모리 모드 AND M140 실행 AND (M핀 처리 중 OR G5.0)
-            if (pmc.F0_7 && pmc.F3_5 && pmc.F10_value == 140 && (pmc.G4_3 || pmc.G5_0))
+            // 투입중: M코드가 설정된 경우만 체크 (0이 아닌 경우)
+            // 스타트 실행 중 AND 메모리 모드 AND M코드 실행 AND (M핀 처리 중 OR G5.0)
+            if (_loadingMCode > 0 && pmc.F0_7 && pmc.F3_5 && pmc.F10_value == _loadingMCode && (pmc.G4_3 || pmc.G5_0))
                 return MachineState.Loading;
 
             // 가공중: 자동 운전 신호 AND 메모리 모드
