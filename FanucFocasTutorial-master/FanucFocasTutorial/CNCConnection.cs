@@ -662,6 +662,83 @@ namespace FanucFocasTutorial
             }
         }
 
+        // 워크 좌표계 읽기
+        // coordNo: 0=EXT, 1=G54, 2=G55, 3=G56, 4=G57, 5=G58, 6=G59
+        // axis: 0=X, 1=Y, 2=Z, 3=C (기계 타입에 따라 다름)
+        // 반환값: mm 단위
+        public double GetWorkCoordinate(short coordNo, short axis)
+        {
+            if (_handle == 0) return 0.0;
+
+            try
+            {
+                Focas1.IODBZOFS zofs = new Focas1.IODBZOFS();
+
+                short ret = Focas1.cnc_rdzofs(_handle, coordNo, axis, 10, zofs);
+                if (ret != Focas1.EW_OK)
+                    return 0.0;
+
+                // 1/1000mm 단위를 mm 단위로 변환
+                return zofs.data[axis] / (double)_scale;
+            }
+            catch
+            {
+                return 0.0;
+            }
+        }
+
+        // 워크 좌표계 쓰기
+        // coordNo: 0=EXT, 1=G54, 2=G55, 3=G56, 4=G57, 5=G58, 6=G59
+        // axis: 0=X, 1=Y, 2=Z, 3=C
+        // value: mm 단위
+        public bool SetWorkCoordinate(short coordNo, short axis, double value)
+        {
+            if (_handle == 0) return false;
+
+            try
+            {
+                Focas1.IODBZOFS zofs = new Focas1.IODBZOFS();
+                zofs.datano = coordNo;
+                zofs.type = axis;
+
+                // mm 단위를 1/1000mm 단위로 변환 (반올림 처리)
+                zofs.data[axis] = (int)Math.Round(value * _scale);
+
+                short length = 10;
+                short ret = Focas1.cnc_wrzofs(_handle, length, zofs);
+                return ret == Focas1.EW_OK;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // 워크 좌표계 전체 읽기 (X, Y, Z 또는 X, Z, C)
+        // coordNo: 0=EXT, 1=G54, 2=G55, 3=G56, 4=G57, 5=G58, 6=G59
+        // 반환값: Dictionary<축이름, 값(mm)>
+        public Dictionary<string, double> GetAllWorkCoordinates(short coordNo, string machineType)
+        {
+            Dictionary<string, double> result = new Dictionary<string, double>();
+
+            if (machineType == "LATHE")
+            {
+                // 선반: X, Z, C
+                result["X"] = GetWorkCoordinate(coordNo, 0);
+                result["Z"] = GetWorkCoordinate(coordNo, 2);
+                result["C"] = GetWorkCoordinate(coordNo, 3);
+            }
+            else // MCT
+            {
+                // 머시닝센터: X, Y, Z
+                result["X"] = GetWorkCoordinate(coordNo, 0);
+                result["Y"] = GetWorkCoordinate(coordNo, 1);
+                result["Z"] = GetWorkCoordinate(coordNo, 2);
+            }
+
+            return result;
+        }
+
         public void Dispose()
         {
             Disconnect();
