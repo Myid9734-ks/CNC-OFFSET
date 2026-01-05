@@ -16,6 +16,7 @@ namespace FanucFocasTutorial
         private TextBox _txtIpAddress;
         private TextBox _txtPort;
         private TextBox _txtLoadingMCode;
+        private ComboBox _cmbMachineType;
 
         // PMC 상태 모니터링 어드레스 탭
         private TextBox _txtF0_0;
@@ -162,6 +163,29 @@ namespace FanucFocasTutorial
                 Font = new Font("맑은 고딕", 8f)
             };
             panel.Controls.Add(lblMCodeDesc);
+            yPos += rowHeight + 20;
+
+            // 기계 타입
+            panel.Controls.Add(CreateLabel("기계 타입:", 10, yPos, labelWidth));
+            _cmbMachineType = new ComboBox
+            {
+                Location = new Point(labelWidth + 10, yPos),
+                Width = textBoxWidth,
+                Font = new Font("맑은 고딕", 9f),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _cmbMachineType.Items.AddRange(new object[] { "MCT", "LATHE" });
+            _cmbMachineType.SelectedIndex = 0;
+            panel.Controls.Add(_cmbMachineType);
+            Label lblMachineTypeDesc = new Label
+            {
+                Text = "* MCT: X,Y,Z축 / LATHE: X,Z,C축",
+                AutoSize = true,
+                Location = new Point(labelWidth + 10, yPos + 30),
+                ForeColor = Color.Gray,
+                Font = new Font("맑은 고딕", 8f)
+            };
+            panel.Controls.Add(lblMachineTypeDesc);
 
             tab.Controls.Add(panel);
             return tab;
@@ -338,6 +362,7 @@ namespace FanucFocasTutorial
             _txtIpAddress.Text = Config.IpAddress ?? "";
             _txtPort.Text = Config.Port.ToString();
             _txtLoadingMCode.Text = Config.LoadingMCode.ToString();
+            _cmbMachineType.SelectedItem = Config.MachineType ?? "MCT";
 
             // PMC 상태 모니터링 어드레스
             _txtF0_0.Text = Config.PmcF0_0 ?? "F0.0";
@@ -389,6 +414,7 @@ namespace FanucFocasTutorial
             Config.IpAddress = _txtIpAddress.Text.Trim();
             Config.Port = port;
             Config.LoadingMCode = loadingMCode;
+            Config.MachineType = _cmbMachineType.SelectedItem?.ToString() ?? "MCT";
 
             // PMC 상태 모니터링 어드레스
             Config.PmcF0_0 = _txtF0_0.Text.Trim();

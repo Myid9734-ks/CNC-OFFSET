@@ -241,6 +241,21 @@ namespace FanucFocasTutorial
             Label spacer2 = new Label { Height = 5, Dock = DockStyle.Top };
             Label spacer4 = new Label { Height = 10, Dock = DockStyle.Top };
 
+            // 좌표계 버튼
+            Button coordinateButton = new Button
+            {
+                Text = "좌표계",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 6
+            };
+            coordinateButton.Click += (s, e) => {
+                // TODO: 좌표계 기능 구현 예정
+                MessageBox.Show("좌표계 기능은 준비 중입니다.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+
             // 수동 옵셋 버튼
             Button manualOffsetButton = new Button
             {
@@ -495,6 +510,7 @@ namespace FanucFocasTutorial
                 autoMonitoringButton,
                 autoOffsetButton,
                 manualOffsetButton,
+                coordinateButton,
                 spacer4,
                 separator,
                 deleteButton,
@@ -1227,6 +1243,7 @@ namespace FanucFocasTutorial
             public string ColorHex { get; set; }
             public string Alias { get; set; } // 설비 별칭 추가
             public int LoadingMCode { get; set; } // 로딩 M코드 추가
+            public string MachineType { get; set; } = "MCT"; // 기계 타입: MCT 또는 LATHE
 
             // PMC 상태 모니터링 어드레스
             public string PmcF0_0 { get; set; } = "F0.0";  // ST_OP 가동 신호
