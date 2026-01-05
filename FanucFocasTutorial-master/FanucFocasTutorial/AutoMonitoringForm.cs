@@ -3,14 +3,28 @@ using System.Collections.Generic;
 using System.Windows.Forms;
 using System.Drawing;
 using System.ComponentModel;
+using System.IO;
 
 namespace FanucFocasTutorial
 {
     public partial class AutoMonitoringForm : Form
     {
+        private static readonly string _logFilePath = Path.Combine(
+            AppDomain.CurrentDomain.BaseDirectory,
+            "MachineState_Debug.txt");
+        private static readonly object _logLock = new object();
+
         private CNCConnection _connection;
+        private MainForm.IPConfig _config;
         private System.Windows.Forms.Timer _updateTimer;
         private TableLayoutPanel _mainLayout;
+
+        // PMC 타입 상수
+        private const short PMC_TYPE_G = 0;
+        private const short PMC_TYPE_F = 1;
+        private const short PMC_TYPE_R = 5;
+        private const short PMC_TYPE_D = 7;
+        private const short PMC_TYPE_X = 4;
 
         // 설비 상태 모니터링 UI 필드
         private Button _btnStateRunning;
@@ -32,6 +46,9 @@ namespace FanucFocasTutorial
         // 근무조 관리
         private ShiftInfo _currentShift;
         private Dictionary<string, ShiftStateData> _shiftStateData;
+
+        // M1 옵셔널 스톱 타이머
+        private DateTime? _m1StartTime = null;
 
         // 시간 정보
         private Label _lblCurrentTime;
@@ -75,9 +92,15 @@ namespace FanucFocasTutorial
         private string _prevCycleTime = "";
         private Color _prevEquipmentStatusColor = Color.White;
 
-        public AutoMonitoringForm(CNCConnection connection)
+        public AutoMonitoringForm(CNCConnection connection, MainForm.IPConfig config = null)
         {
             _connection = connection;
+            _config = config ?? new MainForm.IPConfig
+            {
+                IpAddress = connection.IpAddress,
+                Port = 8193,
+                LoadingMCode = 0
+            };
 
             // 깜빡임 방지
             this.DoubleBuffered = true;
@@ -116,6 +139,52 @@ namespace FanucFocasTutorial
             {
                 InitializeStateForIp(_connection.IpAddress);
             }
+        }
+
+        /// <summary>
+        /// PMC 주소 문자열을 파싱하여 타입, 주소, 비트 위치로 변환
+        /// </summary>
+        private bool ParsePmcAddress(string address, out short pmcType, out ushort pmcAddress, out int bitPosition)
+        {
+            pmcType = 0;
+            pmcAddress = 0;
+            bitPosition = 0;
+
+            if (string.IsNullOrWhiteSpace(address))
+                return false;
+
+            // 타입 문자 추출 (F, G, R, D, X 등)
+            char typeChar = address[0];
+            pmcType = typeChar switch
+            {
+                'F' => PMC_TYPE_F,
+                'G' => PMC_TYPE_G,
+                'R' => PMC_TYPE_R,
+                'D' => PMC_TYPE_D,
+                'X' => PMC_TYPE_X,
+                _ => (short)0
+            };
+
+            if (pmcType == 0)
+                return false;
+
+            // 주소와 비트 파싱
+            string remaining = address.Substring(1);
+            string[] parts = remaining.Split('.');
+
+            if (parts.Length >= 1)
+            {
+                if (!ushort.TryParse(parts[0], out pmcAddress))
+                    return false;
+            }
+
+            if (parts.Length >= 2)
+            {
+                if (!int.TryParse(parts[1], out bitPosition))
+                    return false;
+            }
+
+            return true;
         }
 
         // IP별 상태 초기화
@@ -537,10 +606,16 @@ namespace FanucFocasTutorial
                     int duration = (int)(DateTime.Now - transition.StartTime).TotalSeconds;
                     dailyDurations[transition.CurrentState] += duration;
 
+                    // 상태 변경 로그 작성
+                    WriteStateLog($"[{ip}] 상태변경: {transition.CurrentState} → {currentState} " +
+                        $"(지속시간: {duration}초) | PMC: F0.7={B(pmcResult.values.F0_7)} F1.0={B(pmcResult.values.F1_0)} " +
+                        $"F3.5={B(pmcResult.values.F3_5)} F10={pmcResult.values.F10_value} G4.3={B(pmcResult.values.G4_3)} G5.0={B(pmcResult.values.G5_0)}");
+
                     // 투입 → 실가공 전환 시 생산 수량 증가
                     if (transition.CurrentState == MachineState.Loading && currentState == MachineState.Running)
                     {
                         _connection.IncrementProduction();
+                        WriteStateLog($"[{ip}] 생산수량 증가: {_connection.GetProductionCount()}개");
                     }
 
                     // 근무조 데이터 업데이트
@@ -659,14 +734,53 @@ namespace FanucFocasTutorial
 
             try
             {
-                if (!ReadPmcBit(1, 0, 0, out values.F0_0)) return false;
-                if (!ReadPmcBit(1, 0, 7, out values.F0_7)) return false;
-                if (!ReadPmcBit(1, 1, 0, out values.F1_0)) return false;
-                if (!ReadPmcBit(1, 3, 5, out values.F3_5)) return false;
-                if (!ReadPmcWord(1, 10, out values.F10_value)) return false;
-                if (!ReadPmcBit(0, 4, 3, out values.G4_3)) return false;
-                if (!ReadPmcBit(0, 5, 0, out values.G5_0)) return false;
-                if (!ReadPmcBit(4, 8, 4, out values.X8_4)) return false;
+                // F0.0 (ST_OP 가동)
+                if (ParsePmcAddress(_config.PmcF0_0, out short type_f0_0, out ushort addr_f0_0, out int bit_f0_0))
+                {
+                    if (!ReadPmcBit(type_f0_0, (short)addr_f0_0, (short)bit_f0_0, out values.F0_0)) return false;
+                }
+
+                // F0.7 (스타트 실행)
+                if (ParsePmcAddress(_config.PmcF0_7, out short type_f0_7, out ushort addr_f0_7, out int bit_f0_7))
+                {
+                    if (!ReadPmcBit(type_f0_7, (short)addr_f0_7, (short)bit_f0_7, out values.F0_7)) return false;
+                }
+
+                // F1.0 (알람 신호)
+                if (ParsePmcAddress(_config.PmcF1_0, out short type_f1_0, out ushort addr_f1_0, out int bit_f1_0))
+                {
+                    if (!ReadPmcBit(type_f1_0, (short)addr_f1_0, (short)bit_f1_0, out values.F1_0)) return false;
+                }
+
+                // F3.5 (메모리 모드)
+                if (ParsePmcAddress(_config.PmcF3_5, out short type_f3_5, out ushort addr_f3_5, out int bit_f3_5))
+                {
+                    if (!ReadPmcBit(type_f3_5, (short)addr_f3_5, (short)bit_f3_5, out values.F3_5)) return false;
+                }
+
+                // F10 (M코드 번호 - Word)
+                if (ParsePmcAddress(_config.PmcF10, out short type_f10, out ushort addr_f10, out int _))
+                {
+                    if (!ReadPmcWord(type_f10, (short)addr_f10, out values.F10_value)) return false;
+                }
+
+                // G4.3 (M핀 처리)
+                if (ParsePmcAddress(_config.PmcG4_3, out short type_g4_3, out ushort addr_g4_3, out int bit_g4_3))
+                {
+                    if (!ReadPmcBit(type_g4_3, (short)addr_g4_3, (short)bit_g4_3, out values.G4_3)) return false;
+                }
+
+                // G5.0 (투입 조건)
+                if (ParsePmcAddress(_config.PmcG5_0, out short type_g5_0, out ushort addr_g5_0, out int bit_g5_0))
+                {
+                    if (!ReadPmcBit(type_g5_0, (short)addr_g5_0, (short)bit_g5_0, out values.G5_0)) return false;
+                }
+
+                // X8.4 (비상정지)
+                if (ParsePmcAddress(_config.PmcX8_4, out short type_x8_4, out ushort addr_x8_4, out int bit_x8_4))
+                {
+                    if (!ReadPmcBit(type_x8_4, (short)addr_x8_4, (short)bit_x8_4, out values.X8_4)) return false;
+                }
 
                 return true;
             }
@@ -727,10 +841,26 @@ namespace FanucFocasTutorial
         {
             // 알람 체크: F1.0 (PMC 신호) OR CNC 알람
             if (pmc.F1_0 || _connection.HasAlarm())
+            {
+                _m1StartTime = null;  // M1 타이머 리셋
                 return MachineState.Alarm;
+            }
 
-            // 투입중: 스타트 실행 중 AND 메모리 모드 AND M140 실행 AND (M핀 처리 중 OR G5.0)
-            if (pmc.F0_7 && pmc.F3_5 && pmc.F10_value == 140 && (pmc.G4_3 || pmc.G5_0))
+            // M1 옵셔널 스톱 체크 (3초 이상 지속 시 유휴)
+            if (pmc.F10_value == 1)
+            {
+                if (_m1StartTime == null)
+                    _m1StartTime = DateTime.Now;
+                else if ((DateTime.Now - _m1StartTime.Value).TotalSeconds >= 3)
+                    return MachineState.Idle;  // 3초 이상이면 유휴
+            }
+            else
+            {
+                _m1StartTime = null;  // M1 아니면 리셋
+            }
+
+            // 투입중: M코드가 설정된 경우만 체크 (0이 아닌 경우)
+            if (_config.LoadingMCode > 0 && pmc.F0_7 && pmc.F3_5 && pmc.F10_value == _config.LoadingMCode && (pmc.G4_3 || pmc.G5_0))
                 return MachineState.Loading;
 
             // 가공중: 자동 운전 신호 AND 메모리 모드
@@ -857,6 +987,22 @@ namespace FanucFocasTutorial
             int minutes = (seconds % 3600) / 60;
             int secs = seconds % 60;
             return $"{hours:D2}:{minutes:D2}:{secs:D2}";
+        }
+
+        private void WriteStateLog(string message)
+        {
+            try
+            {
+                lock (_logLock)
+                {
+                    string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+                    File.AppendAllText(_logFilePath, logMessage + Environment.NewLine);
+                }
+            }
+            catch
+            {
+                // 로그 쓰기 실패 시 무시
+            }
         }
     }
 }

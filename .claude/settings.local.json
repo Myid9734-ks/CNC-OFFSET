@@ -35,7 +35,12 @@
       "Bash(git push:*)",
       "Bash(Select-String -Pattern \"error|warning|성공|실패|succeeded|failed\")",
       "Bash(sqlite3:*)",
-      "Bash(Select-Object -First 10)"
+      "Bash(Select-Object -First 10)",
+      "Bash(dir \"C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\" /B)",
+      "Bash(dotnet publish:*)",
+      "Bash(dir \"C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\bin\\\\Release\\\\net9.0-windows\\\\win-x86\\\\publish\")",
+      "Bash(test:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

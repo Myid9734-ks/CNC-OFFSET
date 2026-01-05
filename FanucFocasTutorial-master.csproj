@@ -4,6 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0-windows</TargetFramework>
     <RootNamespace>FanucFocasTutorial</RootNamespace>
+    <AssemblyName>FanucCNCManager</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
@@ -12,6 +13,7 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
     <PublishSingleFile>false</PublishSingleFile>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -40,6 +42,13 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>%(Filename)%(Extension)</Link>
     </None>
+  </ItemGroup>
+
+  <!-- 아이콘 파일 출력 디렉토리로 복사 -->
+  <ItemGroup>
+    <Content Include="app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

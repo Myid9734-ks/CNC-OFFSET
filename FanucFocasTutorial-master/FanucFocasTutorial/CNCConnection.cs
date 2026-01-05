@@ -240,7 +240,7 @@ namespace FanucFocasTutorial
                 else // Z축
                     type = (short)(isGeometry ? 3 : 2);  // Z축 형상(3) 또는 마모(2)
 
-                int ivalue = (int)(value * _scale); // mm 단위를 1/1000mm 단위로 변환
+                int ivalue = (int)Math.Round(value * _scale); // mm 단위를 1/1000mm 단위로 변환 (반올림 처리)
                 short length = 10;
 
                 short ret = Focas1.cnc_wrtofs(_handle, toolNo, type, length, ivalue);

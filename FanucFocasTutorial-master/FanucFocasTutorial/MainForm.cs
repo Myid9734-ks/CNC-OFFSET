@@ -27,10 +27,8 @@ namespace FanucFocasTutorial
         private Dictionary<string, Color> _ipGridColors;
         private Dictionary<string, string> _ipAliases; // IP별 별칭 저장
         private Dictionary<string, int> _ipLoadingMCodes; // IP별 로딩 M코드 저장
+        private Dictionary<string, IPConfig> _ipConfigs; // IP별 전체 설정 저장
         private ListBox _ipList;
-        private TextBox _ipInputBox;
-        private TextBox _aliasInputBox; // 별칭 입력란
-        private TextBox _mcodeInputBox; // M코드 입력란
         private Button _registerButton; // 등록/수정 버튼
         private const int DEFAULT_TIMEOUT = 2;
         private CNCConnection _currentConnection;
@@ -120,6 +118,7 @@ namespace FanucFocasTutorial
             _ipGridColors = new Dictionary<string, Color>();
             _ipAliases = new Dictionary<string, string>(); // 별칭 딕셔너리 초기화
             _ipLoadingMCodes = new Dictionary<string, int>(); // 로딩 M코드 딕셔너리 초기화
+            _ipConfigs = new Dictionary<string, IPConfig>(); // IP별 설정 딕셔너리 초기화
             _macroDataService = new MacroDataService(); // DB 서비스 초기화
             _logDataService = new LogDataService(); // 로그 DB 서비스 초기화
             _syncIndexPerIp = new Dictionary<string, int>(); // IP별 동기화 인덱스 초기화
@@ -138,7 +137,9 @@ namespace FanucFocasTutorial
             // 폼 설정
             this.Text = "Fanuc Tool Offset Monitor";
             this.Size = new System.Drawing.Size(1000, 700);
-            this.WindowState = FormWindowState.Maximized;
+            this.WindowState = FormWindowState.Maximized;  // 시작 시 최대화
+            this.AutoScroll = true;  // 스크롤바 활성화 (작은 화면 대응)
+            this.MinimumSize = new Size(1280, 720);  // 최소 크기 설정
 
             // 중앙 패널 초기화
             _centerPanel = new Panel
@@ -170,109 +171,27 @@ namespace FanucFocasTutorial
                 Padding = new Padding(15)
             };
 
-            // IP 관리를 위한 GroupBox 생성
-            GroupBox ipManageGroup = new GroupBox
+            // IP 관리 및 메뉴를 위한 통합 GroupBox 생성
+            GroupBox combinedGroup = new GroupBox
             {
                 Dock = DockStyle.Fill,
-                Text = "IP 관리",
+                Text = "설비 관리 및 메뉴",
                 Font = new Font("맑은 고딕", 12f, FontStyle.Bold),
                 Padding = new Padding(10)
             };
 
-            // 별칭 입력 텍스트박스
-            _aliasInputBox = new TextBox
+            // 전체 내용을 담을 스크롤 가능한 Panel
+            Panel mainPanel = new Panel
             {
-                Dock = DockStyle.Top,
-                Height = 35,
-                Font = new Font("맑은 고딕", 11f),
-                Text = "설비 별칭 (선택사항, 예: #10 장비)",
-                ForeColor = Color.Gray,
-                Margin = new Padding(0, 0, 0, 3),
-                TabIndex = 1
-            };
-            _aliasInputBox.GotFocus += (s, e) => {
-                if (_aliasInputBox.Text == "설비 별칭 (선택사항, 예: #10 장비)")
-                {
-                    _aliasInputBox.Text = "";
-                    _aliasInputBox.ForeColor = Color.Black;
-                }
-            };
-            _aliasInputBox.LostFocus += (s, e) => {
-                if (string.IsNullOrWhiteSpace(_aliasInputBox.Text))
-                {
-                    _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
-                    _aliasInputBox.ForeColor = Color.Gray;
-                }
-            };
-
-            // M코드 입력 텍스트박스
-            _mcodeInputBox = new TextBox
-            {
-                Dock = DockStyle.Top,
-                Height = 35,
-                Font = new Font("맑은 고딕", 11f),
-                Text = "로딩 M코드 (숫자만, 예: 140)",
-                ForeColor = Color.Gray,
-                Margin = new Padding(0, 0, 0, 3),
-                TabIndex = 3
-            };
-            _mcodeInputBox.GotFocus += (s, e) => {
-                if (_mcodeInputBox.Text == "로딩 M코드 (숫자만, 예: 140)")
-                {
-                    _mcodeInputBox.Text = "";
-                    _mcodeInputBox.ForeColor = Color.Black;
-                }
-            };
-            _mcodeInputBox.LostFocus += (s, e) => {
-                if (string.IsNullOrWhiteSpace(_mcodeInputBox.Text))
-                {
-                    _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
-                    _mcodeInputBox.ForeColor = Color.Gray;
-                }
-            };
-            // 숫자만 입력 가능하도록 설정
-            _mcodeInputBox.KeyPress += (s, e) => {
-                if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
-                {
-                    e.Handled = true;
-                }
-            };
-
-            // IP 입력 텍스트박스
-            _ipInputBox = new TextBox
-            {
-                Dock = DockStyle.Top,
-                Height = 40,
-                Font = new Font("맑은 고딕", 12f),
-                Text = "IP:포트 (예: 192.168.0.100:8193)",
-                Margin = new Padding(0, 0, 0, 5),
-                TabIndex = 2
-            };
-            _ipInputBox.GotFocus += (s, e) => {
-                if (_ipInputBox.Text == "IP:포트 (예: 192.168.0.100:8193)")
-                {
-                    _ipInputBox.Text = "";
-                }
-            };
-            _ipInputBox.LostFocus += (s, e) => {
-                if (string.IsNullOrWhiteSpace(_ipInputBox.Text))
-                {
-                    _ipInputBox.Text = "IP:포트 (예: 192.168.0.100:8193)";
-                }
-            };
-
-            // IP 입력과 등록 버튼 사이 공백
-            Panel ipSpacerPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 20
+                Dock = DockStyle.Fill,
+                AutoScroll = true  // 스크롤 활성화 (낮은 해상도 대응)
             };
 
             // IP 리스트박스
             _ipList = new ListBox
             {
                 Dock = DockStyle.Top,
-                Height = 300,
+                Height = 210,  // 7개 항목 표시 (30px * 7 = 210px)
                 DrawMode = DrawMode.OwnerDrawFixed,
                 ItemHeight = 30,
                 Font = new Font("맑은 고딕", 12f),
@@ -294,18 +213,6 @@ namespace FanucFocasTutorial
             };
             _registerButton.Click += RegisterButton_Click;
 
-            // 초기화 버튼
-            Button clearButton = new Button
-            {
-                Text = "초기화",
-                Dock = DockStyle.Top,
-                Height = 40,
-                Font = new Font("맑은 고딕", 12f),
-                Margin = new Padding(0, 0, 0, 5),  // 5픽셀 간격
-                TabIndex = 6
-            };
-            clearButton.Click += ClearButton_Click;
-
             // 삭제 버튼
             Button deleteButton = new Button
             {
@@ -318,57 +225,27 @@ namespace FanucFocasTutorial
             };
             deleteButton.Click += DeleteButton_Click;
 
+            // IP 관리와 메뉴 사이 구분선
+            Label separator = new Label
+            {
+                Text = "━━━━━━━━━━━━━━━━━━━━━━",
+                Dock = DockStyle.Top,
+                Height = 25,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("맑은 고딕", 10f),
+                ForeColor = Color.Gray
+            };
+
             // 왼쪽 패널에 컨트롤 추가
             Label spacer1 = new Label { Height = 5, Dock = DockStyle.Top };
             Label spacer2 = new Label { Height = 5, Dock = DockStyle.Top };
-            Label spacer3 = new Label { Height = 5, Dock = DockStyle.Top };
-            Label spacer4 = new Label { Height = 5, Dock = DockStyle.Top };
-
-            Label spacer5 = new Label { Height = 5, Dock = DockStyle.Top };
-            Label spacer6 = new Label { Height = 5, Dock = DockStyle.Top };
-
-            ipManageGroup.Controls.AddRange(new Control[] {
-                clearButton,
-                spacer3,
-                deleteButton,
-                spacer2,
-                _registerButton,
-                spacer1,
-                _mcodeInputBox, // M코드 입력란 (3번째)
-                spacer5,
-                _ipInputBox,    // IP 입력란 (2번째)
-                spacer4,
-                _aliasInputBox, // 별칭 입력란 (1번째)
-                spacer6,
-                _ipList
-            });
-
-            leftPanel.Controls.Add(ipManageGroup);
-
-            // 메뉴 컨테이너 GroupBox 생성
-            GroupBox menuGroup = new GroupBox
-            {
-                Dock = DockStyle.Bottom,
-                Height = 300,
-                Text = "메뉴",
-                Font = new Font("맑은 고딕", 12f, FontStyle.Bold),
-                Padding = new Padding(10)
-            };
-
-            // 메뉴 버튼들을 위한 FlowLayoutPanel
-            FlowLayoutPanel menuFlow = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                AutoSize = true
-            };
+            Label spacer4 = new Label { Height = 10, Dock = DockStyle.Top };
 
             // 수동 옵셋 버튼
             Button manualOffsetButton = new Button
             {
                 Text = "수동 옵셋",
-                Width = 250,
+                Dock = DockStyle.Top,
                 Height = 40,
                 Font = new Font("맑은 고딕", 12f),
                 Margin = new Padding(0, 0, 0, 5),
@@ -401,7 +278,7 @@ namespace FanucFocasTutorial
             Button autoOffsetButton = new Button
             {
                 Text = "자동 옵셋",
-                Width = 250,
+                Dock = DockStyle.Top,
                 Height = 40,
                 Font = new Font("맑은 고딕", 12f),
                 Margin = new Padding(0, 0, 0, 5),
@@ -445,7 +322,7 @@ namespace FanucFocasTutorial
             Button autoMonitoringButton = new Button
             {
                 Text = "자동 모니터링",
-                Width = 250,
+                Dock = DockStyle.Top,
                 Height = 40,
                 Font = new Font("맑은 고딕", 12f),
                 Margin = new Padding(0, 0, 0, 5),
@@ -502,7 +379,7 @@ namespace FanucFocasTutorial
                 // 백그라운드 모니터링 폼 재사용 또는 새로 생성
                 if (_backgroundMonitoringForm == null || _backgroundMonitoringForm.IsDisposed)
                 {
-                    _backgroundMonitoringForm = new MultiMonitoringForm(allConnections, _ipAliases, _ipLoadingMCodes);
+                    _backgroundMonitoringForm = new MultiMonitoringForm(allConnections, _ipConfigs);
                     _backgroundMonitoringForm.TopLevel = false;
                     _backgroundMonitoringForm.FormBorderStyle = FormBorderStyle.None;
                     _backgroundMonitoringForm.Dock = DockStyle.Fill;
@@ -521,7 +398,7 @@ namespace FanucFocasTutorial
             Button shiftDataButton = new Button
             {
                 Text = "근무조 현황",
-                Width = 250,
+                Dock = DockStyle.Top,
                 Height = 40,
                 Font = new Font("맑은 고딕", 12f),
                 Margin = new Padding(0, 0, 0, 5),
@@ -575,7 +452,7 @@ namespace FanucFocasTutorial
             Button logRecordButton = new Button
             {
                 Text = "로그기록",
-                Width = 250,
+                Dock = DockStyle.Top,
                 Height = 40,
                 Font = new Font("맑은 고딕", 12f),
                 Margin = new Padding(0, 0, 0, 5),
@@ -611,13 +488,24 @@ namespace FanucFocasTutorial
                 ShowLogViewer();
             };
 
-            menuFlow.Controls.Add(manualOffsetButton);
-            menuFlow.Controls.Add(autoOffsetButton);
-            menuFlow.Controls.Add(autoMonitoringButton);
-            menuFlow.Controls.Add(shiftDataButton);
-            menuFlow.Controls.Add(logRecordButton);
-            menuGroup.Controls.Add(menuFlow);
-            leftPanel.Controls.Add(menuGroup);
+            // 모든 컨트롤을 mainPanel에 추가 (역순으로 추가 - Dock.Top이므로)
+            mainPanel.Controls.AddRange(new Control[] {
+                logRecordButton,
+                shiftDataButton,
+                autoMonitoringButton,
+                autoOffsetButton,
+                manualOffsetButton,
+                spacer4,
+                separator,
+                deleteButton,
+                spacer2,
+                _registerButton,
+                spacer1,
+                _ipList
+            });
+
+            combinedGroup.Controls.Add(mainPanel);
+            leftPanel.Controls.Add(combinedGroup);
 
             // 오른쪽 패널 설정 수정
             Panel rightPanel = new Panel
@@ -1340,6 +1228,25 @@ namespace FanucFocasTutorial
             public string Alias { get; set; } // 설비 별칭 추가
             public int LoadingMCode { get; set; } // 로딩 M코드 추가
 
+            // PMC 상태 모니터링 어드레스
+            public string PmcF0_0 { get; set; } = "F0.0";  // ST_OP 가동 신호
+            public string PmcF0_7 { get; set; } = "F0.7";  // 스타트 실행 중
+            public string PmcF1_0 { get; set; } = "F1.0";  // 알람 신호
+            public string PmcF3_5 { get; set; } = "F3.5";  // 메모리 모드
+            public string PmcF10 { get; set; } = "F10";    // M코드 번호
+            public string PmcG4_3 { get; set; } = "G4.3";  // M핀 처리 중
+            public string PmcG5_0 { get; set; } = "G5.0";  // 추가 투입 조건
+            public string PmcX8_4 { get; set; } = "X8.4";  // 비상정지 신호
+            public string PmcR854_2 { get; set; } = "R854.2"; // 알람 상태 PMC-A
+
+            // PMC 제어 어드레스 - Block Skip
+            public string BlockSkipInputAddr { get; set; } = "R101.2";  // 버튼 입력
+            public string BlockSkipStateAddr { get; set; } = "R201.2";  // 상태 확인
+
+            // PMC 제어 어드레스 - Optional Stop
+            public string OptStopInputAddr { get; set; } = "R101.1";  // 버튼 입력
+            public string OptStopStateAddr { get; set; } = "R201.1";  // 상태 확인
+
             public IPConfig() { } // XML 직렬화를 위한 기본 생성자
         }
 
@@ -1413,6 +1320,9 @@ namespace FanucFocasTutorial
 
                             // 저장된 M코드 복원 (0 포함 - 0은 자동화 없음을 의미)
                             _ipLoadingMCodes[config.IpAddress] = config.LoadingMCode;
+
+                            // 전체 설정 복원
+                            _ipConfigs[config.IpAddress] = config;
                         }
                     }
 
@@ -1481,20 +1391,34 @@ namespace FanucFocasTutorial
                     if (parts.Length == 2)
                     {
                         string ip = parts[0];
-                        ushort port = ushort.Parse(parts[1]);
-                        string colorHex = _ipGridColors.ContainsKey(ip) ?
-                            ColorTranslator.ToHtml(_ipGridColors[ip]) : "";
-                        string alias = _ipAliases.ContainsKey(ip) ? _ipAliases[ip] : ""; // 별칭 가져오기
-                        int loadingMCode = _ipLoadingMCodes.ContainsKey(ip) ? _ipLoadingMCodes[ip] : 0; // M코드 가져오기
 
-                        configList.Configs.Add(new IPConfig
+                        // _ipConfigs에서 전체 설정 가져오기
+                        if (_ipConfigs.ContainsKey(ip))
                         {
-                            IpAddress = ip,
-                            Port = port,
-                            ColorHex = colorHex,
-                            Alias = alias, // 별칭 저장
-                            LoadingMCode = loadingMCode // M코드 저장
-                        });
+                            var config = _ipConfigs[ip];
+                            // 색상 정보만 추가로 설정
+                            config.ColorHex = _ipGridColors.ContainsKey(ip) ?
+                                ColorTranslator.ToHtml(_ipGridColors[ip]) : "";
+                            configList.Configs.Add(config);
+                        }
+                        else
+                        {
+                            // _ipConfigs에 없는 경우 (하위 호환성)
+                            ushort port = ushort.Parse(parts[1]);
+                            string colorHex = _ipGridColors.ContainsKey(ip) ?
+                                ColorTranslator.ToHtml(_ipGridColors[ip]) : "";
+                            string alias = _ipAliases.ContainsKey(ip) ? _ipAliases[ip] : "";
+                            int loadingMCode = _ipLoadingMCodes.ContainsKey(ip) ? _ipLoadingMCodes[ip] : 0;
+
+                            configList.Configs.Add(new IPConfig
+                            {
+                                IpAddress = ip,
+                                Port = port,
+                                ColorHex = colorHex,
+                                Alias = alias,
+                                LoadingMCode = loadingMCode
+                            });
+                        }
                     }
                 }
 
@@ -2033,208 +1957,152 @@ namespace FanucFocasTutorial
 
         private void RegisterButton_Click(object sender, EventArgs e)
         {
-            // 입력값 검증
-            string input = _ipInputBox.Text.Trim();
-            if (string.IsNullOrEmpty(input))
-            {
-                MessageBox.Show("IP 주소와 포트 번호를 입력해주세요.", "입력 오류",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
+            // 선택된 항목이 있으면 수정 모드, 없으면 신규 등록 모드
+            bool isEditMode = _ipList.SelectedItem != null;
+            IPConfig existingConfig = null;
+            string oldIp = null;
+            ushort oldPort = 0;
 
-            string[] parts = input.Split(':');
-            if (parts.Length != 2)
-            {
-                MessageBox.Show("올바른 형식으로 입력해주세요. (예: 192.168.0.100:8193)", "입력 오류",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            string newIp = parts[0];
-            if (!ushort.TryParse(parts[1], out ushort newPort))
-            {
-                MessageBox.Show("올바른 포트 번호를 입력해주세요.", "입력 오류",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            // IP가 선택되어 있으면 수정 모드
-            if (_ipList.SelectedItem != null)
+            if (isEditMode)
             {
                 string selected = _ipList.SelectedItem.ToString();
-                string oldIp = selected.Split(':')[0];
-                ushort oldPort = ushort.Parse(selected.Split(':')[1]);
+                oldIp = selected.Split(':')[0];
+                oldPort = ushort.Parse(selected.Split(':')[1]);
 
-                // 기존 IP와 동일한지 확인
-                bool isSameIp = (oldIp == newIp && oldPort == newPort);
-
-                // 기존 색상 정보 보존
-                Color existingColor = _ipGridColors.ContainsKey(oldIp) ? _ipGridColors[oldIp] : GenerateRandomPastelColor();
-
-                // IP가 변경된 경우 기존 연결 제거
-                if (!isSameIp)
+                // 기존 설정이 있으면 로드, 없으면 기본값으로 새로 생성
+                if (_ipConfigs.ContainsKey(oldIp))
                 {
-                    _connectionManager.RemoveConnection(oldIp);
-                    _connectionStates.Remove(oldIp);
-
-                    // 기존 IP의 색상 정보 제거
-                    _ipGridColors.Remove(oldIp);
-
-                    // 새 IP로 연결 추가
-                    if (!_connectionManager.AddConnection(newIp, newPort, DEFAULT_TIMEOUT))
-                    {
-                        MessageBox.Show("새로운 IP로 연결을 생성하는데 실패했습니다.", "연결 오류",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
-
-                    // 새 IP에 색상 적용
-                    _ipGridColors[newIp] = existingColor;
-                }
-
-                // 별칭 처리 (기존 IP의 별칭 제거)
-                _ipAliases.Remove(oldIp);
-
-                string alias = _aliasInputBox.Text.Trim();
-                if (alias != "설비 별칭 (선택사항, 예: #10 장비)" && !string.IsNullOrWhiteSpace(alias))
-                {
-                    _ipAliases[newIp] = alias;
-                }
-
-                // M코드 처리 (기존 IP의 M코드 제거)
-                _ipLoadingMCodes.Remove(oldIp);
-
-                string mcodeText = _mcodeInputBox.Text.Trim();
-                if (mcodeText != "로딩 M코드 (숫자만, 예: 140)")
-                {
-                    if (string.IsNullOrWhiteSpace(mcodeText))
-                    {
-                        // 빈값은 0으로 저장 (자동화 없음)
-                        _ipLoadingMCodes[newIp] = 0;
-                    }
-                    else if (int.TryParse(mcodeText, out int mcode))
-                    {
-                        _ipLoadingMCodes[newIp] = mcode;
-                    }
-                }
-
-                // 리스트 항목 업데이트
-                int selectedIndex = _ipList.SelectedIndex;
-                _ipList.Items[selectedIndex] = $"{newIp}:{newPort}";
-
-                // 입력란 초기화
-                _ipInputBox.Clear();
-                _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
-                _aliasInputBox.ForeColor = Color.Gray;
-                _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
-                _mcodeInputBox.ForeColor = Color.Gray;
-
-                // 저장 및 화면 갱신
-                SaveIPsToFile();
-                _ipList.Invalidate();
-
-                MessageBox.Show("IP 정보가 수정되었습니다.", "수정 완료",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                // 선택 해제
-                _ipList.SelectedIndex = -1;
-                return;
-            }
-
-            // 새 IP 등록 모드
-            if (_connectionManager.AddConnection(newIp, newPort, DEFAULT_TIMEOUT))
-            {
-                // 새로운 IP 등록 시 랜덤 파스텔 색상 생성 및 적용
-                if (!_ipGridColors.ContainsKey(newIp))
-                {
-                    _ipGridColors[newIp] = GenerateRandomPastelColor();
-                }
-
-                // 별칭 처리
-                string alias = _aliasInputBox.Text.Trim();
-                if (alias == "설비 별칭 (선택사항, 예: #10 장비)" || string.IsNullOrWhiteSpace(alias))
-                {
-                    alias = ""; // 플레이스홀더 텍스트는 빈 문자열로 처리
-                }
-
-                if (!string.IsNullOrEmpty(alias))
-                {
-                    _ipAliases[newIp] = alias;
-                }
-
-                // M코드 처리
-                string mcodeText = _mcodeInputBox.Text.Trim();
-                if (mcodeText != "로딩 M코드 (숫자만, 예: 140)")
-                {
-                    if (string.IsNullOrWhiteSpace(mcodeText))
-                    {
-                        // 빈값은 0으로 저장 (자동화 없음)
-                        _ipLoadingMCodes[newIp] = 0;
-                    }
-                    else if (int.TryParse(mcodeText, out int mcode))
-                    {
-                        _ipLoadingMCodes[newIp] = mcode;
-                    }
-                }
-
-                _ipList.Items.Add($"{newIp}:{newPort}");
-                _ipInputBox.Clear();
-                _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
-                _aliasInputBox.ForeColor = Color.Gray;
-                _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
-                _mcodeInputBox.ForeColor = Color.Gray;
-
-                var connection = _connectionManager.GetConnection(newIp);
-                if (connection.Connect())
-                {
-                    // 첫 번째 연결인 경우에만 _currentConnection 설정
-                    if (_currentConnection == null)
-                    {
-                        _currentConnection = connection;
-                        UpdateMachineStatus(newIp);
-                    }
-
-                    _connectionStates[newIp] = true;
-
-                    // 타이머가 시작되지 않았다면 시작
-                    if (!_updateTimer.Enabled)
-                    {
-                        _updateTimer.Start();
-                    }
-
-                    MessageBox.Show("연결에 성공했습니다.", "연결 성공",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    existingConfig = _ipConfigs[oldIp];
                 }
                 else
                 {
-                    _connectionStates[newIp] = false;
-                    MessageBox.Show($"연결에 실패했습니다.\n{connection.ConnectionStatus}", "연결 실패",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    // 기존 데이터에서 설정 복원
+                    existingConfig = new IPConfig
+                    {
+                        IpAddress = oldIp,
+                        Port = oldPort,
+                        Alias = _ipAliases.ContainsKey(oldIp) ? _ipAliases[oldIp] : "",
+                        LoadingMCode = _ipLoadingMCodes.ContainsKey(oldIp) ? _ipLoadingMCodes[oldIp] : 0
+                    };
                 }
-
-                // IP 설정 저장
-                SaveIPsToFile();
-                _ipList.Invalidate();
             }
-            else
+
+            // 모달창 표시
+            using (var form = new MachineRegistrationForm(existingConfig))
             {
-                MessageBox.Show("이미 등록된 IP 주소입니다.", "등록 오류",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                if (form.ShowDialog() == DialogResult.OK)
+                {
+                    IPConfig config = form.Config;
+                    string newIp = config.IpAddress;
+                    ushort newPort = config.Port;
+
+                    // 수정 모드인 경우
+                    if (isEditMode)
+                    {
+                        bool isSameIp = (oldIp == newIp && oldPort == newPort);
+                        Color existingColor = _ipGridColors.ContainsKey(oldIp) ? _ipGridColors[oldIp] : GenerateRandomPastelColor();
+
+                        // IP가 변경된 경우 기존 연결 제거
+                        if (!isSameIp)
+                        {
+                            _connectionManager.RemoveConnection(oldIp);
+                            _connectionStates.Remove(oldIp);
+                            _ipGridColors.Remove(oldIp);
+                            _ipAliases.Remove(oldIp);
+                            _ipLoadingMCodes.Remove(oldIp);
+                            _ipConfigs.Remove(oldIp);
+
+                            // 새 IP로 연결 추가
+                            if (!_connectionManager.AddConnection(newIp, newPort, DEFAULT_TIMEOUT))
+                            {
+                                MessageBox.Show("새로운 IP로 연결을 생성하는데 실패했습니다.", "연결 오류",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                return;
+                            }
+
+                            // 새 IP에 색상 적용
+                            _ipGridColors[newIp] = existingColor;
+                        }
+                        else
+                        {
+                            // IP가 같으면 기존 데이터만 제거
+                            _ipAliases.Remove(oldIp);
+                            _ipLoadingMCodes.Remove(oldIp);
+                            _ipConfigs.Remove(oldIp);
+                        }
+
+                        // 새 설정 저장
+                        _ipConfigs[newIp] = config;
+                        _ipAliases[newIp] = config.Alias;
+                        _ipLoadingMCodes[newIp] = config.LoadingMCode;
+
+                        // 리스트 항목 업데이트
+                        int selectedIndex = _ipList.SelectedIndex;
+                        _ipList.Items[selectedIndex] = $"{newIp}:{newPort}";
+
+                        SaveIPsToFile();
+                        _ipList.Invalidate();
+
+                        MessageBox.Show("설비 정보가 수정되었습니다.", "수정 완료",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                        _ipList.SelectedIndex = -1;
+                    }
+                    else
+                    {
+                        // 신규 등록 모드
+                        if (_connectionManager.AddConnection(newIp, newPort, DEFAULT_TIMEOUT))
+                        {
+                            // 설정 저장
+                            _ipConfigs[newIp] = config;
+                            _ipAliases[newIp] = config.Alias;
+                            _ipLoadingMCodes[newIp] = config.LoadingMCode;
+
+                            // 랜덤 색상 생성
+                            if (!_ipGridColors.ContainsKey(newIp))
+                            {
+                                _ipGridColors[newIp] = GenerateRandomPastelColor();
+                            }
+
+                            _ipList.Items.Add($"{newIp}:{newPort}");
+
+                            var connection = _connectionManager.GetConnection(newIp);
+                            if (connection.Connect())
+                            {
+                                if (_currentConnection == null)
+                                {
+                                    _currentConnection = connection;
+                                    UpdateMachineStatus(newIp);
+                                }
+
+                                _connectionStates[newIp] = true;
+
+                                if (!_updateTimer.Enabled)
+                                {
+                                    _updateTimer.Start();
+                                }
+
+                                MessageBox.Show("연결에 성공했습니다.", "연결 성공",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            }
+                            else
+                            {
+                                _connectionStates[newIp] = false;
+                                MessageBox.Show($"연결에 실패했습니다.\n{connection.ConnectionStatus}", "연결 실패",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            }
+
+                            SaveIPsToFile();
+                            _ipList.Invalidate();
+                        }
+                        else
+                        {
+                            MessageBox.Show("이미 등록된 IP 주소입니다.", "등록 오류",
+                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+                    }
+                }
             }
-        }
-
-        private void ClearButton_Click(object sender, EventArgs e)
-        {
-            // 입력란 초기화
-            _ipInputBox.Text = "IP:포트 (예: 192.168.0.100:8193)";
-            _ipInputBox.ForeColor = Color.Gray;
-            _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
-            _aliasInputBox.ForeColor = Color.Gray;
-
-            // 리스트 선택 해제
-            _ipList.SelectedIndex = -1;
-
-            // 버튼 텍스트를 "등록"으로 변경 (SelectedIndexChanged에서 자동으로 됨)
         }
 
         private void DeleteButton_Click(object sender, EventArgs e)
@@ -2254,7 +2122,10 @@ namespace FanucFocasTutorial
                 _ipList.Items.Remove(selected);
                 _connectionStates.Remove(ip);
                 _ipGridColors.Remove(ip);
-                _ipAliases.Remove(ip); // 별칭도 제거
+                _ipAliases.Remove(ip);
+                _ipLoadingMCodes.Remove(ip);
+                _ipConfigs.Remove(ip);
+
                 if (_currentConnection?.IpAddress == ip)
                 {
                     _currentConnection = null;
@@ -2270,46 +2141,12 @@ namespace FanucFocasTutorial
         {
             if (_ipList.SelectedItem == null)
             {
-                // 선택 해제 시 입력란 초기화
-                _ipInputBox.Clear();
-                _aliasInputBox.Text = "설비 별칭 (선택사항, 예: #10 장비)";
-                _aliasInputBox.ForeColor = Color.Gray;
-                _mcodeInputBox.Text = "로딩 M코드 (숫자만, 예: 140)";
-                _mcodeInputBox.ForeColor = Color.Gray;
-                _registerButton.Text = "등록"; // 버튼 텍스트를 "등록"으로 변경
+                _registerButton.Text = "등록";
                 return;
             }
 
             string selected = _ipList.SelectedItem.ToString();
             string ip = selected.Split(':')[0];
-
-            // 선택된 IP:포트를 입력란에 표시
-            _ipInputBox.Text = selected;
-            _ipInputBox.ForeColor = Color.Black;
-
-            // 선택된 IP의 별칭을 입력란에 표시
-            if (_ipAliases.ContainsKey(ip) && !string.IsNullOrEmpty(_ipAliases[ip]))
-            {
-                _aliasInputBox.Text = _ipAliases[ip];
-                _aliasInputBox.ForeColor = Color.Black;
-            }
-            else
-            {
-                _aliasInputBox.Text = "";
-                _aliasInputBox.ForeColor = Color.Black;
-            }
-
-            // 선택된 IP의 로딩 M코드를 입력란에 표시
-            if (_ipLoadingMCodes.ContainsKey(ip))
-            {
-                _mcodeInputBox.Text = _ipLoadingMCodes[ip].ToString();
-                _mcodeInputBox.ForeColor = Color.Black;
-            }
-            else
-            {
-                _mcodeInputBox.Text = "";
-                _mcodeInputBox.ForeColor = Color.Black;
-            }
 
             // 버튼 텍스트를 "수정"으로 변경
             _registerButton.Text = "수정";
@@ -2728,19 +2565,97 @@ namespace FanucFocasTutorial
             }
         }
 
-        // Block Skip 버튼 클릭 (R0101.2 버튼 시뮬레이션)
+        // PMC 주소 파싱 헬퍼 함수
+        private bool ParsePmcAddress(string address, out short pmcType, out ushort pmcAddress, out int bitPosition)
+        {
+            pmcType = 0;
+            pmcAddress = 0;
+            bitPosition = 0;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(address))
+                    return false;
+
+                // Type 추출 (첫 문자)
+                char typeChar = address[0];
+                string typeMap = typeChar switch
+                {
+                    'F' => "F",
+                    'G' => "G",
+                    'R' => "R",
+                    'D' => "D",
+                    'X' => "X",
+                    _ => null
+                };
+
+                if (typeMap == null)
+                    return false;
+
+                pmcType = typeChar switch
+                {
+                    'F' => PMC_TYPE_F,
+                    'G' => PMC_TYPE_G,
+                    'R' => PMC_TYPE_R,
+                    'D' => PMC_TYPE_D,
+                    'X' => PMC_TYPE_X,
+                    _ => (short)0
+                };
+
+                // Address와 Bit 추출
+                string remaining = address.Substring(1);
+                string[] parts = remaining.Split('.');
+
+                if (parts.Length >= 1)
+                {
+                    if (!ushort.TryParse(parts[0], out pmcAddress))
+                        return false;
+                }
+
+                if (parts.Length >= 2)
+                {
+                    if (!int.TryParse(parts[1], out bitPosition))
+                        return false;
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // Block Skip 버튼 클릭
         private void ChkBlockSkip_Click(object sender, EventArgs e)
         {
+            if (_currentConnection == null || !_ipConfigs.ContainsKey(_currentConnection.IpAddress))
+                return;
+
+            var config = _ipConfigs[_currentConnection.IpAddress];
+
+            // PMC 주소 파싱
+            if (!ParsePmcAddress(config.BlockSkipStateAddr, out short stateType, out ushort stateAddr, out int stateBit))
+            {
+                MessageBox.Show("Block Skip 상태 주소 설정이 올바르지 않습니다.", "설정 오류", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!ParsePmcAddress(config.BlockSkipInputAddr, out short inputType, out ushort inputAddr, out int inputBit))
+            {
+                MessageBox.Show("Block Skip 입력 주소 설정이 올바르지 않습니다.", "설정 오류", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             // 현재 상태 읽기
-            ReadPmcBit(PMC_TYPE_R, 201, 2, out bool beforeValue);
+            ReadPmcBit(stateType, stateAddr, stateBit, out bool beforeValue);
             bool success = false;
 
-            // R0101.2 (Block Skip 버튼 입력)에 펄스 전송
-            // OFF → ON → OFF 시퀀스로 버튼 누름 시뮬레이션
-            if (WritePmcBit(PMC_TYPE_R, 101, 2, true))
+            // 버튼 입력에 펄스 전송 (OFF → ON → OFF 시퀀스)
+            if (WritePmcBit(inputType, inputAddr, inputBit, true))
             {
                 System.Threading.Thread.Sleep(300); // 300ms 대기 (래더 스캔 보장)
-                WritePmcBit(PMC_TYPE_R, 101, 2, false);
+                WritePmcBit(inputType, inputAddr, inputBit, false);
 
                 // 래더 처리 대기
                 System.Threading.Thread.Sleep(200);
@@ -2749,7 +2664,7 @@ namespace FanucFocasTutorial
             }
 
             // 변경 후 상태 읽기
-            ReadPmcBit(PMC_TYPE_R, 201, 2, out bool afterValue);
+            ReadPmcBit(stateType, stateAddr, stateBit, out bool afterValue);
 
             // 로그 저장
             try
@@ -2772,19 +2687,36 @@ namespace FanucFocasTutorial
             }
         }
 
-        // Optional Stop 버튼 클릭 (R0101.1 버튼 시뮬레이션)
+        // Optional Stop 버튼 클릭
         private void ChkOptStop_Click(object sender, EventArgs e)
         {
+            if (_currentConnection == null || !_ipConfigs.ContainsKey(_currentConnection.IpAddress))
+                return;
+
+            var config = _ipConfigs[_currentConnection.IpAddress];
+
+            // PMC 주소 파싱
+            if (!ParsePmcAddress(config.OptStopStateAddr, out short stateType, out ushort stateAddr, out int stateBit))
+            {
+                MessageBox.Show("Optional Stop 상태 주소 설정이 올바르지 않습니다.", "설정 오류", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!ParsePmcAddress(config.OptStopInputAddr, out short inputType, out ushort inputAddr, out int inputBit))
+            {
+                MessageBox.Show("Optional Stop 입력 주소 설정이 올바르지 않습니다.", "설정 오류", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             // 현재 상태 읽기
-            ReadPmcBit(PMC_TYPE_R, 201, 1, out bool beforeValue);
+            ReadPmcBit(stateType, stateAddr, stateBit, out bool beforeValue);
             bool success = false;
 
-            // R0101.1 (Optional Stop 버튼 입력)에 펄스 전송
-            // OFF → ON → OFF 시퀀스로 버튼 누름 시뮬레이션
-            if (WritePmcBit(PMC_TYPE_R, 101, 1, true))
+            // 버튼 입력에 펄스 전송 (OFF → ON → OFF 시퀀스)
+            if (WritePmcBit(inputType, inputAddr, inputBit, true))
             {
                 System.Threading.Thread.Sleep(300); // 300ms 대기 (래더 스캔 보장)
-                WritePmcBit(PMC_TYPE_R, 101, 1, false);
+                WritePmcBit(inputType, inputAddr, inputBit, false);
 
                 // 래더 처리 대기
                 System.Threading.Thread.Sleep(200);
@@ -2793,7 +2725,7 @@ namespace FanucFocasTutorial
             }
 
             // 변경 후 상태 읽기
-            ReadPmcBit(PMC_TYPE_R, 201, 1, out bool afterValue);
+            ReadPmcBit(stateType, stateAddr, stateBit, out bool afterValue);
 
             // 로그 저장
             try
@@ -2824,16 +2756,29 @@ namespace FanucFocasTutorial
                 return;
             }
 
-            // Block Skip 상태 읽기 (R0201.2 - 실제 상태)
-            if (ReadPmcBit(PMC_TYPE_R, 201, 2, out bool blockSkipState))
+            if (!_ipConfigs.ContainsKey(_currentConnection.IpAddress))
             {
-                UpdateBlockSkipButton(blockSkipState);
+                return;
             }
 
-            // Optional Stop 상태 읽기 (R0201.1 - 실제 상태)
-            if (ReadPmcBit(PMC_TYPE_R, 201, 1, out bool optStopState))
+            var config = _ipConfigs[_currentConnection.IpAddress];
+
+            // Block Skip 상태 읽기
+            if (ParsePmcAddress(config.BlockSkipStateAddr, out short bsType, out ushort bsAddr, out int bsBit))
             {
-                UpdateOptStopButton(optStopState);
+                if (ReadPmcBit(bsType, bsAddr, bsBit, out bool blockSkipState))
+                {
+                    UpdateBlockSkipButton(blockSkipState);
+                }
+            }
+
+            // Optional Stop 상태 읽기
+            if (ParsePmcAddress(config.OptStopStateAddr, out short osType, out ushort osAddr, out int osBit))
+            {
+                if (ReadPmcBit(osType, osAddr, osBit, out bool optStopState))
+                {
+                    UpdateOptStopButton(optStopState);
+                }
             }
         }
 

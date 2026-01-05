@@ -17,14 +17,12 @@ namespace FanucFocasTutorial
         private FlowLayoutPanel _mainLayout;
         private System.Windows.Forms.Timer _updateTimer;
         private Dictionary<string, EquipmentMonitorPanel> _monitorPanels;
-        private Dictionary<string, string> _ipAliases;
-        private Dictionary<string, int> _ipLoadingMCodes;
+        private Dictionary<string, MainForm.IPConfig> _ipConfigs;
 
-        public MultiMonitoringForm(List<CNCConnection> connections, Dictionary<string, string> ipAliases = null, Dictionary<string, int> ipLoadingMCodes = null)
+        public MultiMonitoringForm(List<CNCConnection> connections, Dictionary<string, MainForm.IPConfig> ipConfigs = null)
         {
             _connections = connections;
-            _ipAliases = ipAliases ?? new Dictionary<string, string>();
-            _ipLoadingMCodes = ipLoadingMCodes ?? new Dictionary<string, int>();
+            _ipConfigs = ipConfigs ?? new Dictionary<string, MainForm.IPConfig>();
             _monitorPanels = new Dictionary<string, EquipmentMonitorPanel>();
 
             // 깜빡임 방지
@@ -68,17 +66,12 @@ namespace FanucFocasTutorial
             {
                 if (connection == null) continue;
 
-                // 별칭 가져오기 (없으면 null)
-                string alias = _ipAliases.ContainsKey(connection.IpAddress)
-                    ? _ipAliases[connection.IpAddress]
+                // IPConfig 가져오기
+                MainForm.IPConfig config = _ipConfigs.ContainsKey(connection.IpAddress)
+                    ? _ipConfigs[connection.IpAddress]
                     : null;
 
-                // M코드 가져오기 (없으면 0 기본값 - 자동화 없음)
-                int loadingMCode = _ipLoadingMCodes.ContainsKey(connection.IpAddress)
-                    ? _ipLoadingMCodes[connection.IpAddress]
-                    : 0;
-
-                var panel = new EquipmentMonitorPanel(connection, alias, loadingMCode);
+                var panel = new EquipmentMonitorPanel(connection, config);
                 _monitorPanels[connection.IpAddress] = panel;
                 _mainLayout.Controls.Add(panel);
             }
@@ -147,8 +140,14 @@ namespace FanucFocasTutorial
         private static readonly object _logLock = new object();
 
         private CNCConnection _connection;
-        private string _alias;
-        private int _loadingMCode;
+        private MainForm.IPConfig _config;
+
+        // PMC 타입 상수
+        private const short PMC_TYPE_G = 0;
+        private const short PMC_TYPE_F = 1;
+        private const short PMC_TYPE_R = 5;
+        private const short PMC_TYPE_D = 7;
+        private const short PMC_TYPE_X = 4;
 
         // 근무조 관리
         private ShiftInfo _currentShift;
@@ -156,6 +155,9 @@ namespace FanucFocasTutorial
         private StateTransition _stateTransition;
         private PmcStateValues _currentPmcValues;
         private ShiftStateData _shiftStateData;  // 근무조 데이터 (DB 저장용)
+
+        // M1 옵셔널 스톱 타이머
+        private DateTime? _m1StartTime = null;
 
         // 이전 값 캐싱 (깜빡임 방지)
         private string _prevActualWorking = "";
@@ -186,11 +188,14 @@ namespace FanucFocasTutorial
         private Label _lblOperationRate;
         private Label _lblProduction;
 
-        public EquipmentMonitorPanel(CNCConnection connection, string alias = null, int loadingMCode = 140)
+        public EquipmentMonitorPanel(CNCConnection connection, MainForm.IPConfig config = null)
         {
             _connection = connection;
-            _alias = alias;
-            _loadingMCode = loadingMCode;
+            _config = config ?? new MainForm.IPConfig
+            {
+                IpAddress = connection.IpAddress,
+                LoadingMCode = 140  // 기본값
+            };
 
             // 근무조 초기화
             _currentShift = ShiftManager.GetCurrentShift(DateTime.Now);
@@ -225,6 +230,52 @@ namespace FanucFocasTutorial
             }
         }
 
+        /// <summary>
+        /// PMC 주소 문자열을 파싱하여 타입, 주소, 비트 위치로 변환
+        /// </summary>
+        private bool ParsePmcAddress(string address, out short pmcType, out ushort pmcAddress, out int bitPosition)
+        {
+            pmcType = -1;  // -1을 sentinel 값으로 사용 (PMC_TYPE_G가 0이므로 0 사용 불가)
+            pmcAddress = 0;
+            bitPosition = 0;
+
+            if (string.IsNullOrWhiteSpace(address))
+                return false;
+
+            // 타입 문자 추출 (F, G, R, D, X 등)
+            char typeChar = address[0];
+            pmcType = typeChar switch
+            {
+                'F' => PMC_TYPE_F,
+                'G' => PMC_TYPE_G,
+                'R' => PMC_TYPE_R,
+                'D' => PMC_TYPE_D,
+                'X' => PMC_TYPE_X,
+                _ => (short)-1
+            };
+
+            if (pmcType == -1)  // -1 체크 (0은 유효한 PMC_TYPE_G)
+                return false;
+
+            // 주소와 비트 파싱
+            string remaining = address.Substring(1);
+            string[] parts = remaining.Split('.');
+
+            if (parts.Length >= 1)
+            {
+                if (!ushort.TryParse(parts[0], out pmcAddress))
+                    return false;
+            }
+
+            if (parts.Length >= 2)
+            {
+                if (!int.TryParse(parts[1], out bitPosition))
+                    return false;
+            }
+
+            return true;
+        }
+
         private void InitializeUI()
         {
             // GroupBox 설정
@@ -234,7 +285,7 @@ namespace FanucFocasTutorial
             this.DoubleBuffered = true;  // 깜박임 방지
 
             // 헤더 (별칭 또는 IP + 시간)
-            string displayName = string.IsNullOrWhiteSpace(_alias) ? _connection.IpAddress : $"{_alias} ({_connection.IpAddress})";
+            string displayName = string.IsNullOrWhiteSpace(_config.Alias) ? _connection.IpAddress : $"{_config.Alias} ({_connection.IpAddress})";
             _lblHeader = new Label
             {
                 Text = $"{displayName} | {DateTime.Now:HH:mm:ss}",
@@ -365,7 +416,7 @@ namespace FanucFocasTutorial
         {
             if (_connection == null || !_connection.IsConnected)
             {
-                string displayName = string.IsNullOrWhiteSpace(_alias) ? (_connection?.IpAddress ?? "N/A") : $"{_alias} ({_connection?.IpAddress ?? "N/A"})";
+                string displayName = string.IsNullOrWhiteSpace(_config.Alias) ? (_connection?.IpAddress ?? "N/A") : $"{_config.Alias} ({_connection?.IpAddress ?? "N/A"})";
                 _lblHeader.Text = $"{displayName} | 연결 안됨";
                 _lblHeader.BackColor = Color.Gray;
                 return;
@@ -374,7 +425,7 @@ namespace FanucFocasTutorial
             try
             {
                 // 헤더 업데이트
-                string displayName = string.IsNullOrWhiteSpace(_alias) ? _connection.IpAddress : $"{_alias} ({_connection.IpAddress})";
+                string displayName = string.IsNullOrWhiteSpace(_config.Alias) ? _connection.IpAddress : $"{_config.Alias} ({_connection.IpAddress})";
                 _lblHeader.Text = $"{displayName} | {DateTime.Now:HH:mm:ss}";
 
                 // PMC 값 읽기 및 상태 판별
@@ -382,50 +433,51 @@ namespace FanucFocasTutorial
                 {
                     _currentPmcValues = pmc;
 
-                    // 알람 상태 체크 (PMC R854.2만 사용)
-                    // PMC R854.2 체크 (알람)
+                    // 알람 상태 체크 (설정된 PMC 알람 주소 사용)
                     bool hasAlarmPmcA = false;
                     string alarmDetail = "";
                     try
                     {
-                        const short PMC_TYPE_R = 5;  // R-type (Internal relay)
-
-                        // R854.2 체크
-                        Focas1.IODBPMC0 pmcR854 = new Focas1.IODBPMC0();
-                        short ret854 = Focas1.pmc_rdpmcrng(_connection.Handle, PMC_TYPE_R, 0, 854, 854, 9, pmcR854);
-
-                        if (ret854 == Focas1.EW_OK)
+                        // 설정된 알람 PMC 주소 파싱
+                        if (ParsePmcAddress(_config.PmcR854_2, out short alarmType, out ushort alarmAddr, out int alarmBit))
                         {
-                            byte byteValue = pmcR854.cdata[0];
-                            bool bit0 = (byteValue & (1 << 0)) != 0;
-                            bool bit1 = (byteValue & (1 << 1)) != 0;
-                            bool bit2 = (byteValue & (1 << 2)) != 0;
-                            bool bit3 = (byteValue & (1 << 3)) != 0;
-                            bool bit4 = (byteValue & (1 << 4)) != 0;
-                            bool bit5 = (byteValue & (1 << 5)) != 0;
-                            bool bit6 = (byteValue & (1 << 6)) != 0;
-                            bool bit7 = (byteValue & (1 << 7)) != 0;
+                            Focas1.IODBPMC0 pmcAlarm = new Focas1.IODBPMC0();
+                            short retAlarm = Focas1.pmc_rdpmcrng(_connection.Handle, alarmType, 0, alarmAddr, alarmAddr, 9, pmcAlarm);
 
-                            hasAlarmPmcA = bit2;
-                            alarmDetail = $"R854 byte=0x{byteValue:X2} (Bits: 7={B(bit7)} 6={B(bit6)} 5={B(bit5)} 4={B(bit4)} 3={B(bit3)} 2={B(bit2)} 1={B(bit1)} 0={B(bit0)})";
-
-                            // 로그 파일에 기록
-                            WriteStateLog($"[{_connection.IpAddress}] {alarmDetail}, 알람판정={hasAlarmPmcA}, 현재상태={_stateTransition.CurrentState}");
-
-                            // 상태 전환 시 특별 로그
-                            if (_stateTransition.CurrentState != MachineState.Alarm && hasAlarmPmcA)
+                            if (retAlarm == Focas1.EW_OK)
                             {
-                                WriteStateLog($"[{_connection.IpAddress}] ★★★ 알람 감지! {_stateTransition.CurrentState} -> ALARM ★★★");
+                                byte byteValue = pmcAlarm.cdata[0];
+                                bool bit0 = (byteValue & (1 << 0)) != 0;
+                                bool bit1 = (byteValue & (1 << 1)) != 0;
+                                bool bit2 = (byteValue & (1 << 2)) != 0;
+                                bool bit3 = (byteValue & (1 << 3)) != 0;
+                                bool bit4 = (byteValue & (1 << 4)) != 0;
+                                bool bit5 = (byteValue & (1 << 5)) != 0;
+                                bool bit6 = (byteValue & (1 << 6)) != 0;
+                                bool bit7 = (byteValue & (1 << 7)) != 0;
+
+                                // 설정된 비트 위치의 값을 사용
+                                hasAlarmPmcA = ((byteValue >> alarmBit) & 1) == 1;
+                                alarmDetail = $"{_config.PmcR854_2} byte=0x{byteValue:X2} (Bits: 7={B(bit7)} 6={B(bit6)} 5={B(bit5)} 4={B(bit4)} 3={B(bit3)} 2={B(bit2)} 1={B(bit1)} 0={B(bit0)})";
+
+                                // 로그 파일에 기록
+                                WriteStateLog($"[{_connection.IpAddress}] {alarmDetail}, 알람판정={hasAlarmPmcA}, 현재상태={_stateTransition.CurrentState}");
+
+                                // 상태 전환 시 특별 로그
+                                if (_stateTransition.CurrentState != MachineState.Alarm && hasAlarmPmcA)
+                                {
+                                    WriteStateLog($"[{_connection.IpAddress}] ★★★ 알람 감지! {_stateTransition.CurrentState} -> ALARM ★★★");
+                                }
+                                else if (_stateTransition.CurrentState == MachineState.Alarm && !hasAlarmPmcA)
+                                {
+                                    WriteStateLog($"[{_connection.IpAddress}] ★★★ 알람 해제! ALARM -> ? ★★★");
+                                }
                             }
-                            else if (_stateTransition.CurrentState == MachineState.Alarm && !hasAlarmPmcA)
+                            else
                             {
-                                WriteStateLog($"[{_connection.IpAddress}] ★★★ 알람 해제! ALARM -> ? ★★★");
+                                alarmDetail = $"{_config.PmcR854_2} 읽기 실패 (ret={retAlarm})";
+                                WriteStateLog($"[{_connection.IpAddress}] {alarmDetail}");
                             }
-                        }
-                        else
-                        {
-                            alarmDetail = $"R854 읽기 실패 (ret={ret854})";
-                            WriteStateLog($"[{_connection.IpAddress}] {alarmDetail}");
                         }
                     }
                     catch (Exception ex)
@@ -443,10 +495,16 @@ namespace FanucFocasTutorial
                         int duration = (int)(DateTime.Now - _stateTransition.StartTime).TotalSeconds;
                         _stateDurations[_stateTransition.CurrentState] += duration;
 
+                        // 상태 변경 로그 작성
+                        WriteStateLog($"[{_connection.IpAddress}] 상태변경: {_stateTransition.CurrentState} → {currentState} " +
+                            $"(지속시간: {duration}초) | PMC: F0.7={B(pmc.F0_7)} F1.0={B(pmc.F1_0)} " +
+                            $"F3.5={B(pmc.F3_5)} F10={pmc.F10_value} G4.3={B(pmc.G4_3)} G5.0={B(pmc.G5_0)} AlarmPMC={hasAlarmPmcA}");
+
                         // 투입 → 실가공 전환 시 생산 수량 증가
                         if (_stateTransition.CurrentState == MachineState.Loading && currentState == MachineState.Running)
                         {
                             _connection.IncrementProduction();
+                            WriteStateLog($"[{_connection.IpAddress}] 생산수량 증가: {_connection.GetProductionCount()}개");
                         }
 
                         // 근무조 데이터 업데이트
@@ -583,14 +641,63 @@ namespace FanucFocasTutorial
 
             try
             {
-                if (!ReadPmcBit(1, 0, 0, out values.F0_0)) return false;
-                if (!ReadPmcBit(1, 0, 7, out values.F0_7)) return false;
-                if (!ReadPmcBit(1, 1, 0, out values.F1_0)) return false;
-                if (!ReadPmcBit(1, 3, 5, out values.F3_5)) return false;
-                if (!ReadPmcWord(1, 10, out values.F10_value)) return false;
-                if (!ReadPmcBit(0, 4, 3, out values.G4_3)) return false;
-                if (!ReadPmcBit(0, 5, 0, out values.G5_0)) return false;
-                if (!ReadPmcBit(4, 8, 4, out values.X8_4)) return false;
+                // F0.0 (ST_OP 가동)
+                if (ParsePmcAddress(_config.PmcF0_0, out short type_f0_0, out ushort addr_f0_0, out int bit_f0_0))
+                {
+                    if (!ReadPmcBit(type_f0_0, (short)addr_f0_0, (short)bit_f0_0, out values.F0_0)) return false;
+                }
+
+                // F0.7 (스타트 실행)
+                if (ParsePmcAddress(_config.PmcF0_7, out short type_f0_7, out ushort addr_f0_7, out int bit_f0_7))
+                {
+                    if (!ReadPmcBit(type_f0_7, (short)addr_f0_7, (short)bit_f0_7, out values.F0_7)) return false;
+                }
+
+                // F1.0 (알람 신호)
+                if (ParsePmcAddress(_config.PmcF1_0, out short type_f1_0, out ushort addr_f1_0, out int bit_f1_0))
+                {
+                    if (!ReadPmcBit(type_f1_0, (short)addr_f1_0, (short)bit_f1_0, out values.F1_0)) return false;
+                }
+
+                // F3.5 (메모리 모드)
+                if (ParsePmcAddress(_config.PmcF3_5, out short type_f3_5, out ushort addr_f3_5, out int bit_f3_5))
+                {
+                    if (!ReadPmcBit(type_f3_5, (short)addr_f3_5, (short)bit_f3_5, out values.F3_5)) return false;
+                }
+
+                // F10 (M코드 번호 - Word)
+                if (ParsePmcAddress(_config.PmcF10, out short type_f10, out ushort addr_f10, out int _))
+                {
+                    if (!ReadPmcWord(type_f10, (short)addr_f10, out values.F10_value)) return false;
+                }
+
+                // G4.3 (M핀 처리)
+                if (ParsePmcAddress(_config.PmcG4_3, out short type_g4_3, out ushort addr_g4_3, out int bit_g4_3))
+                {
+                    if (!ReadPmcBit(type_g4_3, (short)addr_g4_3, (short)bit_g4_3, out values.G4_3)) return false;
+                }
+
+                // G5.0 (투입 조건)
+                if (ParsePmcAddress(_config.PmcG5_0, out short type_g5_0, out ushort addr_g5_0, out int bit_g5_0))
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] ★ G5.0 파싱: 문자열='{_config.PmcG5_0}', Type={type_g5_0}, Addr={addr_g5_0}, Bit={bit_g5_0}");
+                    if (!ReadPmcBit(type_g5_0, (short)addr_g5_0, (short)bit_g5_0, out values.G5_0))
+                    {
+                        WriteStateLog($"[{_connection.IpAddress}] ★ G5.0 읽기 실패!");
+                        return false;
+                    }
+                    WriteStateLog($"[{_connection.IpAddress}] ★ G5.0 읽기 성공: {values.G5_0}");
+                }
+                else
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] ★ G5.0 파싱 실패: '{_config.PmcG5_0}'");
+                }
+
+                // X8.4 (비상정지)
+                if (ParsePmcAddress(_config.PmcX8_4, out short type_x8_4, out ushort addr_x8_4, out int bit_x8_4))
+                {
+                    if (!ReadPmcBit(type_x8_4, (short)addr_x8_4, (short)bit_x8_4, out values.X8_4)) return false;
+                }
 
                 return true;
             }
@@ -613,13 +720,25 @@ namespace FanucFocasTutorial
                 {
                     byte byteValue = pmc.cdata[0];
                     value = ((byteValue >> bitPosition) & 1) == 1;
+
+                    // G5.0 읽을 때만 상세 로그
+                    if (pmcType == 0 && address == 5 && bitPosition == 0)
+                    {
+                        WriteStateLog($"[{_connection.IpAddress}] ★★ ReadPmcBit 상세: Type={pmcType}, Addr={address}, Bit={bitPosition}, Byte=0x{byteValue:X2}, Result={value}");
+                    }
+
                     return true;
+                }
+                else
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] ★★ ReadPmcBit 실패: Type={pmcType}, Addr={address}, Bit={bitPosition}, ret={ret}");
                 }
 
                 return false;
             }
-            catch
+            catch (Exception ex)
             {
+                WriteStateLog($"[{_connection.IpAddress}] ★★ ReadPmcBit 예외: Type={pmcType}, Addr={address}, Bit={bitPosition}, Error={ex.Message}");
                 return false;
             }
         }
@@ -839,11 +958,42 @@ namespace FanucFocasTutorial
         {
             // 알람 체크: F1.0 (PMC 신호) OR CNC 알람
             if (pmc.F1_0 || hasAlarmCnc)
+            {
+                _m1StartTime = null;  // M1 타이머 리셋
                 return MachineState.Alarm;
+            }
+
+            // M1 옵셔널 스톱 체크 (3초 이상 지속 시 유휴)
+            if (pmc.F10_value == 1)
+            {
+                if (_m1StartTime == null)
+                    _m1StartTime = DateTime.Now;
+                else if ((DateTime.Now - _m1StartTime.Value).TotalSeconds >= 3)
+                    return MachineState.Idle;  // 3초 이상이면 유휴
+            }
+            else
+            {
+                _m1StartTime = null;  // M1 아니면 리셋
+            }
 
             // 투입중: M코드가 설정된 경우만 체크 (0이 아닌 경우)
             // 스타트 실행 중 AND 메모리 모드 AND M코드 실행 AND (M핀 처리 중 OR G5.0)
-            if (_loadingMCode > 0 && pmc.F0_7 && pmc.F3_5 && pmc.F10_value == _loadingMCode && (pmc.G4_3 || pmc.G5_0))
+            bool loadingCondition1 = _config.LoadingMCode > 0;
+            bool loadingCondition2 = pmc.F0_7;
+            bool loadingCondition3 = pmc.F3_5;
+            bool loadingCondition4 = pmc.F10_value == _config.LoadingMCode;
+            bool loadingCondition5 = pmc.G4_3 || pmc.G5_0;
+
+            // 로딩 조건 디버깅
+            if (_config.LoadingMCode > 0)  // M코드가 설정되어 있을 때만 로그
+            {
+                WriteStateLog($"[{_connection.IpAddress}] 로딩체크: MCode설정={loadingCondition1}({_config.LoadingMCode}), " +
+                    $"F0.7={loadingCondition2}, F3.5={loadingCondition3}, " +
+                    $"F10={pmc.F10_value}(설정={_config.LoadingMCode},일치={loadingCondition4}), " +
+                    $"G4.3/G5.0={loadingCondition5}(G4.3={pmc.G4_3},G5.0={pmc.G5_0})");
+            }
+
+            if (loadingCondition1 && loadingCondition2 && loadingCondition3 && loadingCondition4 && loadingCondition5)
                 return MachineState.Loading;
 
             // 가공중: 자동 운전 신호 AND 메모리 모드
