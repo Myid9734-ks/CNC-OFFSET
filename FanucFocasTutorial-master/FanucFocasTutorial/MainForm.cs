@@ -252,8 +252,76 @@ namespace FanucFocasTutorial
                 TabIndex = 6
             };
             coordinateButton.Click += (s, e) => {
-                // TODO: 좌표계 기능 구현 예정
-                MessageBox.Show("좌표계 기능은 준비 중입니다.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _mainGroupBox.Visible = false;  // 수동 옵셋 화면 숨김
+                _monitoringGroup.Visible = false;  // 모니터링 화면 숨김
+
+                // 기존 자동 옵셋 폼이 있다면 제거
+                var existingAutoOffsetForm = _centerPanel.Controls.OfType<AutoOffsetForm>().FirstOrDefault();
+                if (existingAutoOffsetForm != null)
+                {
+                    existingAutoOffsetForm.StopAutoProcess();
+                    _centerPanel.Controls.Remove(existingAutoOffsetForm);
+                    existingAutoOffsetForm.Dispose();
+                }
+
+                // 기존 좌표계 폼이 있다면 제거
+                var existingCoordForm = _centerPanel.Controls.OfType<CoordinateForm>().FirstOrDefault();
+                if (existingCoordForm != null)
+                {
+                    _centerPanel.Controls.Remove(existingCoordForm);
+                    existingCoordForm.Dispose();
+                }
+
+                if (_ipList.SelectedIndex == -1)
+                {
+                    MessageBox.Show("IP를 먼저 선택하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string selectedIP = _ipList.SelectedItem?.ToString();
+                if (string.IsNullOrEmpty(selectedIP))
+                {
+                    MessageBox.Show("선택된 IP가 올바르지 않습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // IP 주소 파싱 (포트 제외)
+                string[] parts = selectedIP.Split(':');
+                string ipAddress = parts[0];
+
+                // IP 설정 로드 (없으면 기본값 생성)
+                if (!_ipConfigs.TryGetValue(ipAddress, out var config))
+                {
+                    // 기존 IP에 설정이 없는 경우 기본값으로 생성
+                    config = new IPConfig
+                    {
+                        IpAddress = ipAddress,
+                        Port = parts.Length > 1 ? ushort.Parse(parts[1]) : (ushort)8193,
+                        MachineType = "MCT", // 기본값: MCT (Machining Center)
+                        Alias = "",
+                        LoadingMCode = 0
+                    };
+                    _ipConfigs[ipAddress] = config;
+                    SaveIPsToFile(); // 자동 생성된 설정 저장
+                }
+
+                // 연결 확인 (IP 주소만 사용)
+                var connection = _connectionManager.GetConnection(ipAddress);
+                if (connection == null || !connection.IsConnected)
+                {
+                    MessageBox.Show("CNC 연결이 필요합니다. 먼저 연결하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // 좌표계 폼을 메인 패널에 통합 (수동 옵셋처럼)
+                var coordForm = new CoordinateForm(connection, ipAddress, config.MachineType);
+                coordForm.TopLevel = false;
+                coordForm.FormBorderStyle = FormBorderStyle.None;
+                coordForm.Dock = DockStyle.Fill;
+
+                _centerPanel.Controls.Add(coordForm);
+                coordForm.Show();
+                coordForm.BringToFront();
             };
 
             // 수동 옵셋 버튼

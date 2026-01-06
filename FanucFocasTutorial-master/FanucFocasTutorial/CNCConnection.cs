@@ -679,7 +679,8 @@ namespace FanucFocasTutorial
                     return 0.0;
 
                 // 1/1000mm 단위를 mm 단위로 변환
-                return zofs.data[axis] / (double)_scale;
+                // FOCAS는 data[0]에 결과를 저장함 (axis 인덱스가 아님)
+                return zofs.data[0] / (double)_scale;
             }
             catch
             {
@@ -702,7 +703,8 @@ namespace FanucFocasTutorial
                 zofs.type = axis;
 
                 // mm 단위를 1/1000mm 단위로 변환 (반올림 처리)
-                zofs.data[axis] = (int)Math.Round(value * _scale);
+                // FOCAS는 data[0]에 값을 설정함 (axis 인덱스가 아님)
+                zofs.data[0] = (int)Math.Round(value * _scale);
 
                 short length = 10;
                 short ret = Focas1.cnc_wrzofs(_handle, length, zofs);
@@ -714,7 +716,7 @@ namespace FanucFocasTutorial
             }
         }
 
-        // 워크 좌표계 전체 읽기 (X, Y, Z 또는 X, Z, C)
+        // 워크 좌표계 전체 읽기 (X, Y, Z 또는 X, Z)
         // coordNo: 0=EXT, 1=G54, 2=G55, 3=G56, 4=G57, 5=G58, 6=G59
         // 반환값: Dictionary<축이름, 값(mm)>
         public Dictionary<string, double> GetAllWorkCoordinates(short coordNo, string machineType)
@@ -723,10 +725,9 @@ namespace FanucFocasTutorial
 
             if (machineType == "LATHE")
             {
-                // 선반: X, Z, C
-                result["X"] = GetWorkCoordinate(coordNo, 0);
+                // 선반: X=1번, Z=2번 (C축 제거)
+                result["X"] = GetWorkCoordinate(coordNo, 1);
                 result["Z"] = GetWorkCoordinate(coordNo, 2);
-                result["C"] = GetWorkCoordinate(coordNo, 3);
             }
             else // MCT
             {
