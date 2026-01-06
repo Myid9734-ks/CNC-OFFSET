@@ -621,8 +621,9 @@ namespace FanucFocasTutorial
             _txtHistory.ScrollToCaret();
         }
 
-        public void UpdateIP(string ip, string machineType)
+        public void UpdateConnection(CNCConnection connection, string ip, string machineType)
         {
+            _connection = connection;
             _currentIP = ip;
             _machineType = machineType;
 
@@ -631,6 +632,9 @@ namespace FanucFocasTutorial
 
             // IP 변경 시 현재 선택된 좌표 다시 읽기
             LoadCoordinateData(_selectedCoordNo);
+
+            // 전체 좌표계 테이블도 자동 업데이트
+            BtnReadAll_Click(null, EventArgs.Empty);
 
             AddHistory($"IP 변경: {ip} ({machineType})");
         }

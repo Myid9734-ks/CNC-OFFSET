@@ -2263,6 +2263,13 @@ namespace FanucFocasTutorial
                     autoMonitoringForm.UpdateConnection(connection);
                 }
 
+                // 좌표계 폼이 열려있으면 연결 업데이트
+                var coordinateForm = _centerPanel.Controls.OfType<CoordinateForm>().FirstOrDefault();
+                if (coordinateForm != null && _ipConfigs.TryGetValue(ip, out var config))
+                {
+                    coordinateForm.UpdateConnection(connection, ip, config.MachineType);
+                }
+
                 // 수동 옵셋 화면이 표시중이면 매크로 데이터 로드
                 if (_mainGroupBox.Visible)
                 {
