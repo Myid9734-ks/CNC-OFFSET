@@ -45,7 +45,8 @@
       "Bash(cmd /c \"dir C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\bin\\\\Release /s /b | findstr .exe\")",
       "Bash(cmd /c \"dir C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\bin\\\\Release\\\\net9.0-windows\\\\win-x86 /b\")",
       "Bash(cmd /c \"dir C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\bin\\\\Release\\\\net9.0-windows\\\\win-x86\\\\*.exe /b\")",
-      "Bash(cmd /c \"dir C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\bin\\\\Release\\\\net9.0-windows\\\\win-x86\\\\publish\\\\*.exe\")"
+      "Bash(cmd /c \"dir C:\\\\Users\\\\myid9734\\\\Documents\\\\FanucFocasTutorial-master\\\\bin\\\\Release\\\\net9.0-windows\\\\win-x86\\\\publish\\\\*.exe\")",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []
