@@ -267,9 +267,13 @@ namespace FanucFocasTutorial
                 catch (Exception ex)
                 {
                     failCount++;
-                    if (toolNo <= 10 || failCount <= 5) // 초반 10개 또는 처음 5개 실패만 로그
+                    // 모든 실패를 상세 로그에 기록 (디버그용)
+                    _backupLog.AppendLine($"  - ✗ T{toolNo:D3} 읽기 실패: {ex.Message}");
+
+                    // 처음 10개 실패는 상세 정보 추가
+                    if (failCount <= 10)
                     {
-                        _backupLog.AppendLine($"  - T{toolNo:D3} 읽기 실패: {ex.Message}");
+                        _backupLog.AppendLine($"    스택 트레이스: {ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim()}");
                     }
                 }
             }
@@ -432,6 +436,11 @@ namespace FanucFocasTutorial
                     else
                     {
                         failCount++;
+                        // API 실패 시 에러 코드 기록 (처음 10개만)
+                        if (failCount <= 10)
+                        {
+                            _backupLog.AppendLine($"  - ✗ #{macroNo} cnc_rdmacro 실패 (에러 코드: {ret})");
+                        }
                     }
 
                     // 100개마다 진행 상태 로그
@@ -443,9 +452,9 @@ namespace FanucFocasTutorial
                 catch (Exception ex)
                 {
                     failCount++;
-                    if (failCount <= 3) // 처음 3개 실패만 로그
+                    if (failCount <= 10) // 처음 10개 실패만 로그
                     {
-                        _backupLog.AppendLine($"  - #{macroNo} 읽기 실패: {ex.Message}");
+                        _backupLog.AppendLine($"  - ✗ #{macroNo} 예외 발생: {ex.Message}");
                     }
                 }
             }
@@ -782,6 +791,11 @@ namespace FanucFocasTutorial
                     else
                     {
                         failCount++;
+                        // API 실패 시 에러 코드 기록 (처음 10개만)
+                        if (failCount <= 10)
+                        {
+                            _backupLog.AppendLine($"  - ✗ 파라미터 {paramNo} cnc_rdparam 실패 (에러 코드: {ret})");
+                        }
                     }
 
                     // 200개마다 진행 상태 업데이트
@@ -794,9 +808,9 @@ namespace FanucFocasTutorial
                 catch (Exception ex)
                 {
                     failCount++;
-                    if (failCount <= 3) // 처음 3개 실패만 로그
+                    if (failCount <= 10) // 처음 10개 실패만 로그
                     {
-                        _backupLog.AppendLine($"  - 파라미터 {paramNo} 읽기 실패: {ex.Message}");
+                        _backupLog.AppendLine($"  - ✗ 파라미터 {paramNo} 예외 발생: {ex.Message}");
                     }
                 }
             }
