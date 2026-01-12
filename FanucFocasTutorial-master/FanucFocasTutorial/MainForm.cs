@@ -571,8 +571,98 @@ namespace FanucFocasTutorial
                 ShowLogViewer();
             };
 
+            // 백업 메뉴 구분선
+            Label backupSeparator = new Label
+            {
+                Text = "━━━━━━ 백업 관리 ━━━━━━",
+                Dock = DockStyle.Top,
+                Height = 30,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("맑은 고딕", 10f, FontStyle.Bold),
+                ForeColor = Color.DarkBlue
+            };
+
+            // NC 프로그램 백업 버튼
+            Button ncProgramBackupButton = new Button
+            {
+                Text = "NC 프로그램 백업",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 12
+            };
+            ncProgramBackupButton.Click += NcProgramBackupButton_Click;
+
+            // 파라미터 백업 버튼
+            Button parameterBackupButton = new Button
+            {
+                Text = "파라미터 백업",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 13
+            };
+            parameterBackupButton.Click += ParameterBackupButton_Click;
+
+            // PMC/래더 백업 버튼
+            Button pmcLadderBackupButton = new Button
+            {
+                Text = "PMC/래더 백업",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 14
+            };
+            pmcLadderBackupButton.Click += PmcLadderBackupButton_Click;
+
+            // 공구 옵셋 백업 버튼
+            Button toolOffsetBackupButton = new Button
+            {
+                Text = "공구 옵셋 백업",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 15
+            };
+            toolOffsetBackupButton.Click += ToolOffsetBackupButton_Click;
+
+            // 워크 좌표계 백업 버튼
+            Button workCoordinateBackupButton = new Button
+            {
+                Text = "워크 좌표계 백업",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 16
+            };
+            workCoordinateBackupButton.Click += WorkCoordinateBackupButton_Click;
+
+            // 매크로 변수 백업 버튼
+            Button macroVariableBackupButton = new Button
+            {
+                Text = "매크로 변수 백업",
+                Dock = DockStyle.Top,
+                Height = 40,
+                Font = new Font("맑은 고딕", 12f),
+                Margin = new Padding(0, 0, 0, 5),
+                TabIndex = 17
+            };
+            macroVariableBackupButton.Click += MacroVariableBackupButton_Click;
+
             // 모든 컨트롤을 mainPanel에 추가 (역순으로 추가 - Dock.Top이므로)
             mainPanel.Controls.AddRange(new Control[] {
+                macroVariableBackupButton,
+                workCoordinateBackupButton,
+                toolOffsetBackupButton,
+                pmcLadderBackupButton,
+                parameterBackupButton,
+                ncProgramBackupButton,
+                backupSeparator,
                 logRecordButton,
                 shiftDataButton,
                 autoMonitoringButton,
@@ -1931,9 +2021,9 @@ namespace FanucFocasTutorial
                 }
 
                 // 입력값 범위 체크
-                if (Math.Abs(inputValue) > 0.11)
+                if (Math.Abs(inputValue) > 0.22)
                 {
-                    MessageBox.Show($"입력값({inputValue:F3})이 허용 범위(±0.11)를 초과합니다.", 
+                    MessageBox.Show($"입력값({inputValue:F3})이 허용 범위(±0.22)를 초과합니다.",
                         "입력값 범위 초과", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     txtInput.Text = "";
                     return;
@@ -2932,10 +3022,10 @@ namespace FanucFocasTutorial
                 return;
             }
 
-            // 증감값 범위 제한: -0.1 ~ +0.1
-            if (incrementValue < -0.1 || incrementValue > 0.1)
+            // 증감값 범위 제한: -0.2 ~ +0.2
+            if (incrementValue < -0.2 || incrementValue > 0.2)
             {
-                MessageBox.Show("증감값은 -0.1 ~ +0.1 범위 내에서 입력하세요.", "입력 범위 초과", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("증감값은 -0.2 ~ +0.2 범위 내에서 입력하세요.", "입력 범위 초과", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 _macroValueInput.Focus();
                 _macroValueInput.SelectAll();
                 return;
@@ -3509,6 +3599,425 @@ namespace FanucFocasTutorial
             catch
             {
                 // 로그 실패는 무시 (프로그램 실행에 영향 없도록)
+            }
+        }
+
+        // ============================================
+        // 백업 관련 이벤트 핸들러
+        // ============================================
+
+        private void NcProgramBackupButton_Click(object sender, EventArgs e)
+        {
+            if (_ipList.SelectedIndex == -1)
+            {
+                MessageBox.Show("백업할 설비를 먼저 선택하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string selectedIP = _ipList.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedIP))
+            {
+                MessageBox.Show("선택된 IP가 올바르지 않습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string[] parts = selectedIP.Split(':');
+            string ipAddress = parts[0];
+
+            var connection = _connectionManager.GetConnection(ipAddress);
+            if (connection == null || !connection.IsConnected)
+            {
+                MessageBox.Show("CNC 연결이 필요합니다. 먼저 연결하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                // 프로그레스 다이얼로그 생성
+                Form progressForm = new Form
+                {
+                    Text = "NC 프로그램 백업 중...",
+                    Width = 500,
+                    Height = 150,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    StartPosition = FormStartPosition.CenterParent,
+                    MaximizeBox = false,
+                    MinimizeBox = false,
+                    ControlBox = false
+                };
+
+                ProgressBar progressBar = new ProgressBar
+                {
+                    Dock = DockStyle.Top,
+                    Height = 30,
+                    Style = ProgressBarStyle.Continuous
+                };
+
+                Label statusLabel = new Label
+                {
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Text = "백업 준비 중..."
+                };
+
+                progressForm.Controls.Add(statusLabel);
+                progressForm.Controls.Add(progressBar);
+
+                // 비동기 백업 실행
+                BackupService backupService = new BackupService(connection);
+                Dictionary<string, string> results = null;
+                Exception backupException = null;
+
+                System.Threading.Thread backupThread = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        results = backupService.BackupAllNCPrograms((current, total, message) =>
+                        {
+                            // UI 스레드에서 업데이트
+                            progressForm.Invoke(new Action(() =>
+                            {
+                                progressBar.Maximum = total;
+                                progressBar.Value = current;
+                                statusLabel.Text = $"{message}\n진행: {current}/{total} ({(current * 100 / total)}%)";
+                            }));
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        backupException = ex;
+                    }
+                    finally
+                    {
+                        // 다이얼로그 닫기
+                        progressForm.Invoke(new Action(() => progressForm.Close()));
+                    }
+                });
+
+                backupThread.Start();
+                progressForm.ShowDialog();
+                backupThread.Join();
+
+                // 예외 발생 시 처리
+                if (backupException != null)
+                {
+                    throw backupException;
+                }
+
+                // 결과가 없으면 리턴
+                if (results == null)
+                {
+                    MessageBox.Show("백업이 취소되었습니다.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                // 에러 확인
+                if (results.ContainsKey("Error"))
+                {
+                    StringBuilder errorMsg = new StringBuilder();
+                    errorMsg.AppendLine("NC 프로그램 백업 실패:");
+                    errorMsg.AppendLine();
+                    errorMsg.AppendLine(results["Error"]);
+
+                    if (results.ContainsKey("StackTrace"))
+                    {
+                        errorMsg.AppendLine();
+                        errorMsg.AppendLine("상세 정보:");
+                        errorMsg.AppendLine(results["StackTrace"]);
+                    }
+
+                    MessageBox.Show(errorMsg.ToString(), "백업 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // 결과 메시지 생성
+                StringBuilder message = new StringBuilder();
+                message.AppendLine("NC 프로그램 백업 완료!");
+                message.AppendLine();
+
+                if (results.ContainsKey("Info"))
+                {
+                    message.AppendLine(results["Info"]);
+                }
+
+                if (results.ContainsKey("Summary"))
+                {
+                    message.AppendLine(results["Summary"]);
+                }
+
+                MessageBox.Show(message.ToString(), "백업 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                string errorMsg = $"NC 프로그램 백업 중 예외 발생:\n{ex.Message ?? "알 수 없는 에러"}";
+
+                if (!string.IsNullOrEmpty(ex.StackTrace))
+                {
+                    errorMsg += $"\n\n스택 트레이스:\n{ex.StackTrace}";
+                }
+
+                // 디버그 로그 파일에도 기록
+                try
+                {
+                    string debugLog = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "MainForm_NCBackup_Error.txt");
+                    File.AppendAllText(debugLog, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {errorMsg}\n\n");
+                }
+                catch { }
+
+                MessageBox.Show(errorMsg, "백업 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void ParameterBackupButton_Click(object sender, EventArgs e)
+        {
+            if (_ipList.SelectedIndex == -1)
+            {
+                MessageBox.Show("백업할 설비를 먼저 선택하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string selectedIP = _ipList.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedIP))
+            {
+                MessageBox.Show("선택된 IP가 올바르지 않습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string[] parts = selectedIP.Split(':');
+            string ipAddress = parts[0];
+
+            var connection = _connectionManager.GetConnection(ipAddress);
+            if (connection == null || !connection.IsConnected)
+            {
+                MessageBox.Show("CNC 연결이 필요합니다. 먼저 연결하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var result = MessageBox.Show("파라미터 백업을 시작하시겠습니까?\n(시간이 다소 걸릴 수 있습니다)",
+                    "파라미터 백업", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                if (result != DialogResult.Yes) return;
+
+                // 진행 상태 표시 폼 생성
+                Form progressForm = new Form
+                {
+                    Text = "파라미터 백업 중...",
+                    Size = new Size(400, 150),
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    MaximizeBox = false,
+                    MinimizeBox = false,
+                    ControlBox = false
+                };
+
+                Label progressLabel = new Label
+                {
+                    Text = "백업 중... 0 / 2000",
+                    Location = new Point(20, 20),
+                    AutoSize = true,
+                    Font = new Font("맑은 고딕", 10f)
+                };
+
+                ProgressBar progressBar = new ProgressBar
+                {
+                    Location = new Point(20, 50),
+                    Size = new Size(340, 30),
+                    Maximum = 2000,
+                    Value = 0
+                };
+
+                progressForm.Controls.Add(progressLabel);
+                progressForm.Controls.Add(progressBar);
+
+                BackupService backupService = new BackupService(connection);
+                string filePath = "";
+
+                // 백그라운드에서 백업 실행
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    filePath = backupService.BackupParameter((current, total) =>
+                    {
+                        // UI 스레드에서 업데이트
+                        this.Invoke((MethodInvoker)delegate
+                        {
+                            progressBar.Value = current;
+                            progressLabel.Text = $"백업 중... {current} / {total}";
+                        });
+                    });
+
+                    // 완료 후 폼 닫기
+                    this.Invoke((MethodInvoker)delegate
+                    {
+                        progressForm.Close();
+                    });
+                });
+
+                progressForm.ShowDialog(this);
+
+                MessageBox.Show($"파라미터 백업 완료!\n저장 위치: {filePath}", "백업 성공", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"파라미터 백업 실패:\n{ex.Message}", "백업 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void PmcLadderBackupButton_Click(object sender, EventArgs e)
+        {
+            if (_ipList.SelectedIndex == -1)
+            {
+                MessageBox.Show("백업할 설비를 먼저 선택하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string selectedIP = _ipList.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedIP))
+            {
+                MessageBox.Show("선택된 IP가 올바르지 않습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string[] parts = selectedIP.Split(':');
+            string ipAddress = parts[0];
+
+            var connection = _connectionManager.GetConnection(ipAddress);
+            if (connection == null || !connection.IsConnected)
+            {
+                MessageBox.Show("CNC 연결이 필요합니다. 먼저 연결하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var result = MessageBox.Show("PMC/래더 백업을 시작하시겠습니까?",
+                    "PMC/래더 백업", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                if (result != DialogResult.Yes) return;
+
+                BackupService backupService = new BackupService(connection);
+                string filePath = backupService.BackupPMCLadder();
+
+                MessageBox.Show($"PMC/래더 백업 완료!\n저장 위치: {filePath}", "백업 성공", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"PMC/래더 백업 실패:\n{ex.Message}", "백업 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void ToolOffsetBackupButton_Click(object sender, EventArgs e)
+        {
+            if (_ipList.SelectedIndex == -1)
+            {
+                MessageBox.Show("백업할 설비를 먼저 선택하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string selectedIP = _ipList.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedIP))
+            {
+                MessageBox.Show("선택된 IP가 올바르지 않습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string[] parts = selectedIP.Split(':');
+            string ipAddress = parts[0];
+
+            var connection = _connectionManager.GetConnection(ipAddress);
+            if (connection == null || !connection.IsConnected)
+            {
+                MessageBox.Show("CNC 연결이 필요합니다. 먼저 연결하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                BackupService backupService = new BackupService(connection);
+                string filePath = backupService.BackupToolOffset();
+
+                MessageBox.Show($"공구 옵셋 백업 완료!\n저장 위치: {filePath}", "백업 성공", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"공구 옵셋 백업 실패:\n{ex.Message}", "백업 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void WorkCoordinateBackupButton_Click(object sender, EventArgs e)
+        {
+            if (_ipList.SelectedIndex == -1)
+            {
+                MessageBox.Show("백업할 설비를 먼저 선택하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string selectedIP = _ipList.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedIP))
+            {
+                MessageBox.Show("선택된 IP가 올바르지 않습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string[] parts = selectedIP.Split(':');
+            string ipAddress = parts[0];
+
+            var connection = _connectionManager.GetConnection(ipAddress);
+            if (connection == null || !connection.IsConnected)
+            {
+                MessageBox.Show("CNC 연결이 필요합니다. 먼저 연결하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                BackupService backupService = new BackupService(connection);
+                string filePath = backupService.BackupWorkCoordinate();
+
+                MessageBox.Show($"워크 좌표계 백업 완료!\n저장 위치: {filePath}", "백업 성공", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"워크 좌표계 백업 실패:\n{ex.Message}", "백업 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void MacroVariableBackupButton_Click(object sender, EventArgs e)
+        {
+            if (_ipList.SelectedIndex == -1)
+            {
+                MessageBox.Show("백업할 설비를 먼저 선택하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string selectedIP = _ipList.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedIP))
+            {
+                MessageBox.Show("선택된 IP가 올바르지 않습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string[] parts = selectedIP.Split(':');
+            string ipAddress = parts[0];
+
+            var connection = _connectionManager.GetConnection(ipAddress);
+            if (connection == null || !connection.IsConnected)
+            {
+                MessageBox.Show("CNC 연결이 필요합니다. 먼저 연결하세요.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                BackupService backupService = new BackupService(connection);
+                string filePath = backupService.BackupMacroVariable();
+
+                MessageBox.Show($"매크로 변수 백업 완료!\n저장 위치: {filePath}", "백업 성공", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"매크로 변수 백업 실패:\n{ex.Message}", "백업 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
