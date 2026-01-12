@@ -660,6 +660,16 @@ namespace FanucFocasTutorial
                     }
                     catch (Exception ex)
                     {
+                        // 연결 끊김 감지 (EW_HANDLE = -8)
+                        if (ex.Message.Contains("에러 코드: -8"))
+                        {
+                            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ✗✗✗ 연결 끊김 감지 (EW_HANDLE) - 백업 중단\n");
+                            _backupLog.AppendLine($"  ✗✗✗ 연결 끊김 감지 (에러 코드: -8, EW_HANDLE)");
+                            _backupLog.AppendLine($"  백업을 중단합니다. CNC와의 연결을 확인하세요.");
+                            _backupLog.AppendLine($"  진행: {i+1}/{programNumbers.Count} (성공: {successCount}, 실패: {failCount})");
+                            throw new Exception($"CNC 연결이 끊어졌습니다. 백업을 중단합니다.\n\n진행 상황: {successCount}개 성공, {failCount}개 실패\n\n해결 방법:\n1. CNC 재연결\n2. 프로그램 재시작\n3. 백업 재시도");
+                        }
+
                         // 프로그램이 존재하지 않는 경우는 건너뜀 (EW_DATA = 5)
                         if (ex.Message.Contains("업로드 시작 실패") && (ex.Message.Contains("에러 코드: 5") || ex.Message.Contains("EW_DATA")))
                         {
@@ -674,6 +684,13 @@ namespace FanucFocasTutorial
                         _backupLog.AppendLine($"  [O{progNum}] ✗ 백업 실패: {ex.Message}");
                         _backupLog.AppendLine();
                         failCount++;
+
+                        // 연속으로 10개 이상 실패하면 연결 문제 의심
+                        if (failCount >= 10 && successCount == 0)
+                        {
+                            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ✗ 연속 {failCount}개 실패 - 연결 문제 의심\n");
+                            _backupLog.AppendLine($"  ✗ 연속 {failCount}개 실패 - CNC 연결 상태를 확인하세요.");
+                        }
                     }
 
                     // 진행 상황 업데이트
