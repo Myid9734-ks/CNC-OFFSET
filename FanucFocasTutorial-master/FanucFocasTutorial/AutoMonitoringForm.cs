@@ -287,7 +287,31 @@ namespace FanucFocasTutorial
                     }
                     WriteStateLog($"[{ip}] ========== 미측정 시간 계산 완료 ==========");
 
-                    // DB에서 복원
+                    // 미측정 시간이 추가된 경우 DB에서 최신 데이터를 다시 읽어서 모든 시간 동기화
+                    if (lastUpdatedTime.HasValue && 
+                        DateTime.Now >= _currentShift.StartTime && 
+                        DateTime.Now < _currentShift.EndTime &&
+                        (DateTime.Now - lastUpdatedTime.Value).TotalSeconds > 0)
+                    {
+                        WriteStateLog($"[{ip}] ========== DB에서 최신 데이터 재조회 (모든 시간 동기화) ==========");
+                        var refreshedData = logService.LoadShiftStateData(
+                            ip,
+                            _currentShift.StartTime.Date,
+                            _currentShift.Type);
+                        
+                        if (refreshedData != null)
+                        {
+                            savedData = refreshedData;
+                            WriteStateLog($"[{ip}] 최신 데이터 재조회 완료 - Running:{FormatDuration(savedData.RunningSeconds)} " +
+                                $"Loading:{FormatDuration(savedData.LoadingSeconds)} " +
+                                $"Alarm:{FormatDuration(savedData.AlarmSeconds)} " +
+                                $"Idle:{FormatDuration(savedData.IdleSeconds)} " +
+                                $"Unmeasured:{FormatDuration(savedData.UnmeasuredSeconds)} " +
+                                $"생산:{savedData.ProductionCount}개");
+                        }
+                    }
+
+                    // DB에서 복원 (모든 시간 동기화)
                     _shiftStateData[ip] = savedData;
                     WriteStateLog($"[{ip}] ========== DB 데이터 복원 완료 ==========");
                     WriteStateLog($"[{ip}] 복원된 데이터 - Running:{FormatDuration(savedData.RunningSeconds)} " +
@@ -644,11 +668,14 @@ namespace FanucFocasTutorial
         {
             WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] ========== 프로그램 종료 시작 ==========");
             
+            // 프로그램 종료 시점을 한 번만 기록
+            DateTime shutdownTime = DateTime.Now;
+            
             // 현재 근무조 데이터 저장
             if (_connection != null && _connection.IsConnected)
             {
-                WriteStateLog($"[{_connection.IpAddress}] 종료 시 데이터 저장 시작");
-                SaveCurrentShiftData(_connection.IpAddress);
+                WriteStateLog($"[{_connection.IpAddress}] 종료 시 데이터 저장 시작 (종료 시점: {shutdownTime:yyyy-MM-dd HH:mm:ss.fff})");
+                SaveCurrentShiftData(_connection.IpAddress, shutdownTime);
             }
             else
             {
@@ -806,6 +833,16 @@ namespace FanucFocasTutorial
                 else
                 {
                     transition.ElapsedSeconds = (int)(DateTime.Now - transition.StartTime).TotalSeconds;
+                    
+                    // 상태 유지 중 시간 누적 로그 (10초마다 기록)
+                    if (transition.ElapsedSeconds > 0 && transition.ElapsedSeconds % 10 == 0)
+                    {
+                        WriteStateLog($"[{ip}] 상태 유지 중: {currentState} (경과시간: {FormatDuration(transition.ElapsedSeconds)}, " +
+                            $"시작시간: {transition.StartTime:HH:mm:ss}, 누적시간: Running:{FormatDuration(dailyDurations[MachineState.Running])} " +
+                            $"Loading:{FormatDuration(dailyDurations[MachineState.Loading])} " +
+                            $"Alarm:{FormatDuration(dailyDurations[MachineState.Alarm])} " +
+                            $"Idle:{FormatDuration(dailyDurations[MachineState.Idle])})");
+                    }
                 }
 
                 UpdateStateMonitoringUI(currentState, transition, dailyDurations);
@@ -882,13 +919,14 @@ namespace FanucFocasTutorial
         /// <summary>
         /// 현재 근무조 데이터 DB 저장
         /// </summary>
-        private void SaveCurrentShiftData(string ip)
+        private void SaveCurrentShiftData(string ip, DateTime? shutdownTime = null)
         {
             if (!_shiftStateData.ContainsKey(ip))
                 return;
 
             try
             {
+                DateTime updateTime = shutdownTime ?? DateTime.Now;
                 var shiftData = _shiftStateData[ip];
                 var dailyDurations = _dailyStateDurations[ip];
 
@@ -896,7 +934,7 @@ namespace FanucFocasTutorial
                 if (_stateTransitions.ContainsKey(ip))
                 {
                     var transition = _stateTransitions[ip];
-                    int elapsedSeconds = (int)(DateTime.Now - transition.StartTime).TotalSeconds;
+                    int elapsedSeconds = (int)(updateTime - transition.StartTime).TotalSeconds;
 
                     // 현재 상태에 진행 중인 시간 추가
                     dailyDurations[transition.CurrentState] += elapsedSeconds;
@@ -911,6 +949,10 @@ namespace FanucFocasTutorial
                 shiftData.IdleSeconds = dailyDurations[MachineState.Idle];
 
                 WriteStateLog($"[{ip}] ========== DB 저장 시작 ==========");
+                if (shutdownTime.HasValue)
+                {
+                    WriteStateLog($"[{ip}] 프로그램 종료 시점 저장: {shutdownTime.Value:yyyy-MM-dd HH:mm:ss.fff}");
+                }
                 WriteStateLog($"[{ip}] 저장되는 데이터:");
                 WriteStateLog($"[{ip}]   - Running: {FormatDuration(shiftData.RunningSeconds)} ({shiftData.RunningSeconds}초)");
                 WriteStateLog($"[{ip}]   - Loading: {FormatDuration(shiftData.LoadingSeconds)} ({shiftData.LoadingSeconds}초)");
@@ -920,12 +962,12 @@ namespace FanucFocasTutorial
                 WriteStateLog($"[{ip}]   - 생산수량: {shiftData.ProductionCount}개");
                 WriteStateLog($"[{ip}]   - 근무조: {shiftData.ShiftType}, 날짜: {shiftData.ShiftDate:yyyy-MM-dd}");
 
-                // DB 저장
+                // DB 저장 (종료 시점 시간 전달)
                 var logService = new LogDataService();
                 try
                 {
-                    logService.SaveShiftStateData(shiftData);
-                    WriteStateLog($"[{ip}] ★ DB 저장 성공 - 마지막 업데이트 시간: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                    logService.SaveShiftStateData(shiftData, updateTime);
+                    WriteStateLog($"[{ip}] ★ DB 저장 성공 - 마지막 업데이트 시간: {updateTime:yyyy-MM-dd HH:mm:ss.fff}");
                 }
                 catch (Exception ex)
                 {
@@ -1052,36 +1094,133 @@ namespace FanucFocasTutorial
             }
         }
 
+        /// <summary>
+        /// 설비 상태 판별 (우선순위 순서)
+        /// </summary>
+        /// <param name="pmc">PMC 신호 값</param>
+        /// <returns>판별된 설비 상태</returns>
+        /// 
+        /// <설비 상태 판별 우선순위>
+        /// 1. 장애정지 (Alarm) - 최우선
+        ///    조건: F1.0 = 1 (PMC 알람 신호) OR CNC 알람 발생
+        /// 
+        /// 2. 유휴 (Idle) - M1 옵셔널 스톱
+        ///    조건: F10 = 1 (M1 코드) AND 3초 이상 지속
+        /// 
+        /// 3. 제품교체 (Loading) - 투입 중
+        ///    조건: LoadingMCode > 0 (설정된 경우만)
+        ///       AND F0.7 = 1 (스타트 실행)
+        ///       AND F3.5 = 1 (메모리 모드)
+        ///       AND F10 = LoadingMCode (설정된 M코드와 일치)
+        ///       AND (G4.3 = 1 OR G5.0 = 1) (M핀 처리 중 OR 투입 조건)
+        /// 
+        /// 4. 가공중 (Running) - 실가공
+        ///    조건: F0.7 = 1 (스타트 실행)
+        ///       AND F3.5 = 1 (메모리 모드)
+        /// 
+        /// 5. 유휴 (Idle) - 기본값
+        ///    위 조건에 해당하지 않는 경우
+        /// </설비 상태 판별 우선순위>
         private MachineState DetermineMachineState(PmcStateValues pmc)
         {
-            // 알람 체크: F1.0 (PMC 신호) OR CNC 알람
-            if (pmc.F1_0 || _connection.HasAlarm())
+            string ip = _connection?.IpAddress ?? "N/A";
+            WriteStateLog($"[{ip}] ========== 설비 상태 판별 시작 ==========");
+            WriteStateLog($"[{ip}] PMC 신호값 - F0.7={B(pmc.F0_7)} F1.0={B(pmc.F1_0)} F3.5={B(pmc.F3_5)} F10={pmc.F10_value} G4.3={B(pmc.G4_3)} G5.0={B(pmc.G5_0)}");
+            WriteStateLog($"[{ip}] 설정값 - LoadingMCode={_config.LoadingMCode}");
+
+            // 1순위: 알람 체크 (최우선)
+            // 조건: F1.0 (PMC 알람 신호) OR CNC 알람
+            bool hasPmcAlarm = pmc.F1_0;
+            bool hasCncAlarm = _connection.HasAlarm();
+            WriteStateLog($"[{ip}] [1순위] 알람 체크 - F1.0={B(hasPmcAlarm)}, CNC알람={B(hasCncAlarm)}");
+            
+            if (hasPmcAlarm || hasCncAlarm)
             {
                 _m1StartTime = null;  // M1 타이머 리셋
+                WriteStateLog($"[{ip}] ★★★ 상태 판별: ALARM (알람 감지) ★★★");
                 return MachineState.Alarm;
             }
+            WriteStateLog($"[{ip}] [1순위] 알람 아님 - 다음 조건 체크");
 
-            // M1 옵셔널 스톱 체크 (3초 이상 지속 시 유휴)
+            // 2순위: M1 옵셔널 스톱 체크 (3초 이상 지속 시 유휴)
+            // 조건: F10 = 1 (M1 코드) AND 3초 이상 지속
+            WriteStateLog($"[{ip}] [2순위] M1 옵셔널 스톱 체크 - F10={pmc.F10_value}");
+            
             if (pmc.F10_value == 1)
             {
                 if (_m1StartTime == null)
+                {
                     _m1StartTime = DateTime.Now;
-                else if ((DateTime.Now - _m1StartTime.Value).TotalSeconds >= 3)
-                    return MachineState.Idle;  // 3초 이상이면 유휴
+                    WriteStateLog($"[{ip}] [2순위] M1 감지 - 타이머 시작: {_m1StartTime.Value:HH:mm:ss}");
+                }
+                else
+                {
+                    double elapsedSeconds = (DateTime.Now - _m1StartTime.Value).TotalSeconds;
+                    WriteStateLog($"[{ip}] [2순위] M1 지속 중 - 경과시간: {elapsedSeconds:F1}초");
+                    
+                    if (elapsedSeconds >= 3)
+                    {
+                        WriteStateLog($"[{ip}] ★★★ 상태 판별: IDLE (M1 옵셔널 스톱 3초 이상) ★★★");
+                        return MachineState.Idle;  // 3초 이상이면 유휴
+                    }
+                    WriteStateLog($"[{ip}] [2순위] M1 3초 미만 - 다음 조건 체크");
+                }
             }
             else
             {
+                if (_m1StartTime != null)
+                {
+                    WriteStateLog($"[{ip}] [2순위] M1 아님 - 타이머 리셋 (이전 M1 시작: {_m1StartTime.Value:HH:mm:ss})");
+                }
                 _m1StartTime = null;  // M1 아니면 리셋
             }
 
-            // 투입중: M코드가 설정된 경우만 체크 (0이 아닌 경우)
-            if (_config.LoadingMCode > 0 && pmc.F0_7 && pmc.F3_5 && pmc.F10_value == _config.LoadingMCode && (pmc.G4_3 || pmc.G5_0))
+            // 3순위: 투입중 (제품교체)
+            // 조건: LoadingMCode > 0 (설정된 경우만)
+            //    AND F0.7 = 1 (스타트 실행)
+            //    AND F3.5 = 1 (메모리 모드)
+            //    AND F10 = LoadingMCode (설정된 M코드와 일치)
+            //    AND (G4.3 = 1 OR G5.0 = 1) (M핀 처리 중 OR 투입 조건)
+            bool loadingCondition1 = _config.LoadingMCode > 0;
+            bool loadingCondition2 = pmc.F0_7;
+            bool loadingCondition3 = pmc.F3_5;
+            bool loadingCondition4 = pmc.F10_value == _config.LoadingMCode;
+            bool loadingCondition5 = pmc.G4_3 || pmc.G5_0;
+            
+            WriteStateLog($"[{ip}] [3순위] 제품교체(Loading) 체크:");
+            WriteStateLog($"[{ip}]   - 조건1 (LoadingMCode > 0): {loadingCondition1} (설정값={_config.LoadingMCode})");
+            WriteStateLog($"[{ip}]   - 조건2 (F0.7 스타트 실행): {loadingCondition2}");
+            WriteStateLog($"[{ip}]   - 조건3 (F3.5 메모리 모드): {loadingCondition3}");
+            WriteStateLog($"[{ip}]   - 조건4 (F10 = LoadingMCode): {loadingCondition4} (F10={pmc.F10_value}, 설정={_config.LoadingMCode})");
+            WriteStateLog($"[{ip}]   - 조건5 (G4.3 OR G5.0): {loadingCondition5} (G4.3={B(pmc.G4_3)}, G5.0={B(pmc.G5_0)})");
+            
+            if (loadingCondition1 && loadingCondition2 && loadingCondition3 && loadingCondition4 && loadingCondition5)
+            {
+                WriteStateLog($"[{ip}] ★★★ 상태 판별: LOADING (제품교체 중) ★★★");
                 return MachineState.Loading;
+            }
+            WriteStateLog($"[{ip}] [3순위] 제품교체 조건 불만족 - 다음 조건 체크");
 
-            // 가공중: 자동 운전 신호 AND 메모리 모드
-            if (pmc.F0_7 && pmc.F3_5)
+            // 4순위: 가공중 (실가공)
+            // 조건: F0.7 = 1 (스타트 실행) AND F3.5 = 1 (메모리 모드)
+            bool runningCondition1 = pmc.F0_7;
+            bool runningCondition2 = pmc.F3_5;
+            
+            WriteStateLog($"[{ip}] [4순위] 가공중(Running) 체크:");
+            WriteStateLog($"[{ip}]   - 조건1 (F0.7 스타트 실행): {runningCondition1}");
+            WriteStateLog($"[{ip}]   - 조건2 (F3.5 메모리 모드): {runningCondition2}");
+            
+            if (runningCondition1 && runningCondition2)
+            {
+                WriteStateLog($"[{ip}] ★★★ 상태 판별: RUNNING (가공 중) ★★★");
                 return MachineState.Running;
+            }
+            WriteStateLog($"[{ip}] [4순위] 가공중 조건 불만족");
 
+            // 5순위: 유휴 (기본값)
+            // 위 조건에 해당하지 않는 경우
+            WriteStateLog($"[{ip}] ★★★ 상태 판별: IDLE (유휴 - 기본값) ★★★");
+            WriteStateLog($"[{ip}] ========== 설비 상태 판별 완료 ==========");
             return MachineState.Idle;
         }
 
@@ -1221,22 +1360,33 @@ namespace FanucFocasTutorial
                     string logFilePath = GetLogFilePath();
                     string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
                     
+                    // 디렉토리 확인 및 생성
+                    string logDirectory = Path.GetDirectoryName(logFilePath);
+                    if (!string.IsNullOrEmpty(logDirectory) && !Directory.Exists(logDirectory))
+                    {
+                        Directory.CreateDirectory(logDirectory);
+                    }
+                    
                     // 파일이 없으면 헤더 작성
                     if (!File.Exists(logFilePath))
                     {
                         string header = $"========================================\n";
                         header += $"자동모니터링 로그 파일\n";
                         header += $"생성일시: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n";
+                        header += $"로그 파일 경로: {logFilePath}\n";
                         header += $"========================================\n\n";
-                        File.WriteAllText(logFilePath, header);
+                        File.WriteAllText(logFilePath, header, System.Text.Encoding.UTF8);
                     }
                     
-                    File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
+                    File.AppendAllText(logFilePath, logMessage + Environment.NewLine, System.Text.Encoding.UTF8);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // 로그 쓰기 실패 시 무시
+                // 로그 쓰기 실패 시 콘솔에 출력 (디버깅용)
+                System.Diagnostics.Debug.WriteLine($"로그 파일 쓰기 실패: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"파일 경로: {GetLogFilePath()}");
+                System.Diagnostics.Debug.WriteLine($"예외: {ex}");
             }
         }
     }

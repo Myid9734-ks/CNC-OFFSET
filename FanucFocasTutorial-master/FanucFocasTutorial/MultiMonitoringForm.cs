@@ -85,13 +85,41 @@ namespace FanucFocasTutorial
             };
             _updateTimer.Tick += UpdateTimer_Tick;
             _updateTimer.Start();
+            
+            // 타이머 시작 로그
+            WriteTimerLog("타이머 시작 - 1초 간격 업데이트");
         }
 
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
-            foreach (var panel in _monitorPanels.Values)
+            try
             {
-                panel.UpdateDisplay();
+                WriteTimerLog($"타이머 틱 시작 - {DateTime.Now:HH:mm:ss.fff} (패널 수: {_monitorPanels.Count}개)");
+                
+                foreach (var panel in _monitorPanels.Values)
+                {
+                    panel.UpdateDisplay();
+                }
+                
+                WriteTimerLog($"타이머 틱 완료 - {DateTime.Now:HH:mm:ss.fff}");
+            }
+            catch (Exception ex)
+            {
+                WriteTimerLog($"타이머 틱 오류: {ex.Message}");
+            }
+        }
+
+        private void WriteTimerLog(string message)
+        {
+            try
+            {
+                string logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "R854_Debug.txt");
+                string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [MultiMonitoringForm] {message}";
+                File.AppendAllText(logFilePath, logMessage + Environment.NewLine, System.Text.Encoding.UTF8);
+            }
+            catch
+            {
+                // 로그 쓰기 실패 시 무시
             }
         }
 
@@ -506,6 +534,37 @@ namespace FanucFocasTutorial
                             $"(지속시간: {duration}초) | PMC: F0.7={B(pmc.F0_7)} F1.0={B(pmc.F1_0)} " +
                             $"F3.5={B(pmc.F3_5)} F10={pmc.F10_value} G4.3={B(pmc.G4_3)} G5.0={B(pmc.G5_0)} AlarmPMC={hasAlarmPmcA}");
 
+                        // 사이클 로그 저장 (10초 단위, Loading/Running만)
+                        if (_stateTransition.CurrentState == MachineState.Loading || 
+                            _stateTransition.CurrentState == MachineState.Running)
+                        {
+                            try
+                            {
+                                var logService = new LogDataService();
+                                int? cycleNumber = null;
+                                
+                                // Loading → Running 전환 시 사이클 번호 부여
+                                if (_stateTransition.CurrentState == MachineState.Loading && currentState == MachineState.Running)
+                                {
+                                    cycleNumber = _connection.GetProductionCount() + 1; // 다음 생산수량
+                                }
+                                
+                                logService.SaveCycleStateLog(
+                                    _connection.IpAddress,
+                                    _currentShift.StartTime.Date,
+                                    _currentShift.Type,
+                                    _stateTransition.CurrentState,
+                                    duration,
+                                    _stateTransition.StartTime,
+                                    cycleNumber
+                                );
+                            }
+                            catch (Exception ex)
+                            {
+                                WriteStateLog($"[{_connection.IpAddress}] 사이클 로그 저장 실패: {ex.Message}");
+                            }
+                        }
+
                         // 투입 → 실가공 전환 시 생산 수량 증가
                         if (_stateTransition.CurrentState == MachineState.Loading && currentState == MachineState.Running)
                         {
@@ -791,8 +850,37 @@ namespace FanucFocasTutorial
                 // 현재 근무조 데이터 저장
                 SaveShiftData();
 
+                // 이전 근무조 리포트 생성 및 저장 (리포트는 ShiftDataViewForm에서 표시)
+                try
+                {
+                    var logService = new LogDataService();
+                    var report = logService.GenerateCycleReport(
+                        _connection.IpAddress,
+                        _currentShift.StartTime.Date,
+                        _currentShift.Type
+                    );
+                    WriteStateLog($"[{_connection.IpAddress}] 이전 근무조 리포트 생성 완료 - 총 사이클: {report.TotalCycles}개, 특이사항: {report.AnomalyCount}개");
+                }
+                catch (Exception ex)
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] 리포트 생성 실패: {ex.Message}");
+                }
+
                 // 새 근무조로 전환
                 _currentShift = newShift;
+
+                // 다음날 같은 근무조 시작 시 이전 데이터 삭제
+                try
+                {
+                    var logService = new LogDataService();
+                    DateTime previousShiftDate = _currentShift.StartTime.Date.AddDays(-1);
+                    logService.DeleteCycleLogs(_connection.IpAddress, previousShiftDate, _currentShift.Type);
+                    WriteStateLog($"[{_connection.IpAddress}] 이전 근무조 사이클 로그 삭제 완료 ({previousShiftDate:yyyy-MM-dd} {_currentShift.Type})");
+                }
+                catch (Exception ex)
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] 사이클 로그 삭제 실패: {ex.Message}");
+                }
 
                 // 상태 추적 초기화
                 _stateDurations[MachineState.Running] = 0;
@@ -839,6 +927,19 @@ namespace FanucFocasTutorial
         {
             try
             {
+                DateTime updateTime = DateTime.Now;
+                
+                // 현재 진행 중인 상태의 시간을 먼저 누적에 반영
+                MachineState currentState = _stateTransition.CurrentState;
+                int elapsedSeconds = (int)(updateTime - _stateTransition.StartTime).TotalSeconds;
+                
+                // 현재 상태에 진행 중인 시간 추가
+                if (elapsedSeconds > 0)
+                {
+                    _stateDurations[currentState] += elapsedSeconds;
+                    WriteStateLog($"[{_connection.IpAddress}] 근무조 변경 시 현재 상태({currentState}) {elapsedSeconds}초 추가 반영");
+                }
+                
                 // 현재 상태의 누적 시간 최종 반영
                 _shiftStateData.RunningSeconds = _stateDurations[MachineState.Running];
                 _shiftStateData.LoadingSeconds = _stateDurations[MachineState.Loading];

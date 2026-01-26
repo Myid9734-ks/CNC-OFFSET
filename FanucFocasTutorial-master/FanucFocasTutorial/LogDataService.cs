@@ -183,6 +183,24 @@ namespace FanucFocasTutorial
                 }
                 catch { } // 컬럼이 이미 존재하면 무시
 
+                // 제품 사이클 로그 테이블 (하루치만 저장)
+                string createCycleLogTable = @"
+                    CREATE TABLE IF NOT EXISTS ProductCycleLogs (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        IpAddress TEXT NOT NULL,
+                        ShiftDate TEXT NOT NULL,
+                        ShiftType TEXT NOT NULL,
+                        State TEXT NOT NULL,
+                        DurationSeconds INTEGER NOT NULL,
+                        Timestamp TEXT NOT NULL,
+                        CycleNumber INTEGER
+                    )";
+
+                using (var cmd = new SQLiteCommand(createCycleLogTable, conn))
+                {
+                    cmd.ExecuteNonQuery();
+                }
+
                 // 인덱스 생성
                 string createIndexes = @"
                     CREATE INDEX IF NOT EXISTS idx_state_logs_timestamp
@@ -193,6 +211,9 @@ namespace FanucFocasTutorial
 
                     CREATE INDEX IF NOT EXISTS idx_shift_logs_ip_date
                     ON ShiftStateLogs(IpAddress, ShiftDate, ShiftType);
+
+                    CREATE INDEX IF NOT EXISTS idx_cycle_logs_ip_date
+                    ON ProductCycleLogs(IpAddress, ShiftDate, ShiftType);
                 ";
 
                 using (var cmd = new SQLiteCommand(createIndexes, conn))
@@ -554,8 +575,10 @@ namespace FanucFocasTutorial
         /// <summary>
         /// 근무조 상태 데이터 저장
         /// </summary>
-        public void SaveShiftStateData(ShiftStateData data)
+        public void SaveShiftStateData(ShiftStateData data, DateTime? updateTime = null)
         {
+            DateTime saveTime = updateTime ?? DateTime.Now;
+            
             using (var conn = new SQLiteConnection(_connectionString))
             {
                 conn.Open();
@@ -581,8 +604,8 @@ namespace FanucFocasTutorial
                     cmd.Parameters.AddWithValue("@IdleSeconds", data.IdleSeconds);
                     cmd.Parameters.AddWithValue("@UnmeasuredSeconds", data.UnmeasuredSeconds);
                     cmd.Parameters.AddWithValue("@ProductionCount", data.ProductionCount);
-                    cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now.ToString("o"));
-                    cmd.Parameters.AddWithValue("@LastUpdatedAt", DateTime.Now.ToString("o"));
+                    cmd.Parameters.AddWithValue("@CreatedAt", saveTime.ToString("o"));
+                    cmd.Parameters.AddWithValue("@LastUpdatedAt", saveTime.ToString("o"));
 
                     cmd.ExecuteNonQuery();
                 }
@@ -959,8 +982,10 @@ namespace FanucFocasTutorial
         /// <summary>
         /// 근무조 데이터 업데이트 (미측정 시간 포함)
         /// </summary>
-        public void UpdateShiftStateData(ShiftStateData data)
+        public void UpdateShiftStateData(ShiftStateData data, DateTime? updateTime = null)
         {
+            DateTime saveTime = updateTime ?? DateTime.Now;
+            
             using (var conn = new SQLiteConnection(_connectionString))
             {
                 conn.Open();
@@ -1011,14 +1036,14 @@ namespace FanucFocasTutorial
                         cmd.Parameters.AddWithValue("@IdleSeconds", data.IdleSeconds);
                         cmd.Parameters.AddWithValue("@UnmeasuredSeconds", data.UnmeasuredSeconds);
                         cmd.Parameters.AddWithValue("@ProductionCount", data.ProductionCount);
-                        cmd.Parameters.AddWithValue("@LastUpdatedAt", DateTime.Now.ToString("o"));
+                        cmd.Parameters.AddWithValue("@LastUpdatedAt", saveTime.ToString("o"));
                         cmd.ExecuteNonQuery();
                     }
                 }
                 else
                 {
                     // 레코드가 없으면 INSERT
-                    SaveShiftStateData(data);
+                    SaveShiftStateData(data, saveTime);
                 }
             }
         }
@@ -1057,5 +1082,214 @@ namespace FanucFocasTutorial
 
             return null;
         }
+
+        // ==================== 제품 사이클 로그 관리 ====================
+
+        /// <summary>
+        /// 제품 사이클 상태 전환 로그 저장 (10초 단위)
+        /// </summary>
+        public void SaveCycleStateLog(string ipAddress, DateTime shiftDate, ShiftType shiftType, 
+            MachineState state, int durationSeconds, DateTime timestamp, int? cycleNumber = null)
+        {
+            // 10초 단위로 반올림
+            int roundedDuration = (int)Math.Round(durationSeconds / 10.0) * 10;
+            
+            // 10초 미만은 저장하지 않음
+            if (roundedDuration < 10)
+                return;
+
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                string sql = @"
+                    INSERT INTO ProductCycleLogs
+                    (IpAddress, ShiftDate, ShiftType, State, DurationSeconds, Timestamp, CycleNumber)
+                    VALUES (@IpAddress, @ShiftDate, @ShiftType, @State, @DurationSeconds, @Timestamp, @CycleNumber)";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
+                    cmd.Parameters.AddWithValue("@ShiftDate", shiftDate.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@ShiftType", shiftType.ToString());
+                    cmd.Parameters.AddWithValue("@State", state.ToString());
+                    cmd.Parameters.AddWithValue("@DurationSeconds", roundedDuration);
+                    cmd.Parameters.AddWithValue("@Timestamp", timestamp.ToString("o"));
+                    cmd.Parameters.AddWithValue("@CycleNumber", cycleNumber.HasValue ? (object)cycleNumber.Value : DBNull.Value);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 특정 근무조의 사이클 로그 조회
+        /// </summary>
+        public List<CycleStateLog> GetCycleLogs(string ipAddress, DateTime shiftDate, ShiftType shiftType)
+        {
+            var result = new List<CycleStateLog>();
+
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                string sql = @"
+                    SELECT * FROM ProductCycleLogs
+                    WHERE IpAddress = @IpAddress
+                      AND ShiftDate = @ShiftDate
+                      AND ShiftType = @ShiftType
+                    ORDER BY Timestamp ASC";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
+                    cmd.Parameters.AddWithValue("@ShiftDate", shiftDate.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@ShiftType", shiftType.ToString());
+
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            result.Add(new CycleStateLog
+                            {
+                                IpAddress = reader["IpAddress"].ToString(),
+                                ShiftDate = DateTime.Parse(reader["ShiftDate"].ToString()),
+                                ShiftType = (ShiftType)Enum.Parse(typeof(ShiftType), reader["ShiftType"].ToString()),
+                                State = (MachineState)Enum.Parse(typeof(MachineState), reader["State"].ToString()),
+                                DurationSeconds = Convert.ToInt32(reader["DurationSeconds"]),
+                                Timestamp = DateTime.Parse(reader["Timestamp"].ToString()),
+                                CycleNumber = reader["CycleNumber"] != DBNull.Value ? (int?)Convert.ToInt32(reader["CycleNumber"]) : null
+                            });
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 특정 근무조의 사이클 로그 삭제 (다음날 같은 근무조 시작 시)
+        /// </summary>
+        public void DeleteCycleLogs(string ipAddress, DateTime shiftDate, ShiftType shiftType)
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                string sql = @"
+                    DELETE FROM ProductCycleLogs
+                    WHERE IpAddress = @IpAddress
+                      AND ShiftDate = @ShiftDate
+                      AND ShiftType = @ShiftType";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
+                    cmd.Parameters.AddWithValue("@ShiftDate", shiftDate.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@ShiftType", shiftType.ToString());
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 사이클 리포트 생성 (평균, 특이사항 등)
+        /// </summary>
+        public CycleReport GenerateCycleReport(string ipAddress, DateTime shiftDate, ShiftType shiftType)
+        {
+            var logs = GetCycleLogs(ipAddress, shiftDate, shiftType);
+            
+            if (logs.Count == 0)
+                return new CycleReport { HasData = false };
+
+            // 사이클 추출 (Loading → Running 패턴)
+            var cycles = new List<CycleData>();
+            CycleData currentCycle = null;
+
+            foreach (var log in logs)
+            {
+                if (log.State == MachineState.Loading)
+                {
+                    // 새 사이클 시작
+                    if (currentCycle != null && currentCycle.RunningSeconds > 0)
+                    {
+                        cycles.Add(currentCycle);
+                    }
+                    currentCycle = new CycleData
+                    {
+                        StartTime = log.Timestamp,
+                        LoadingSeconds = log.DurationSeconds
+                    };
+                }
+                else if (log.State == MachineState.Running && currentCycle != null)
+                {
+                    currentCycle.RunningSeconds = log.DurationSeconds;
+                    currentCycle.EndTime = log.Timestamp;
+                }
+            }
+
+            // 마지막 사이클 추가
+            if (currentCycle != null && currentCycle.RunningSeconds > 0)
+            {
+                cycles.Add(currentCycle);
+            }
+
+            if (cycles.Count == 0)
+                return new CycleReport { HasData = false };
+
+            // 통계 계산
+            var cycleTimes = cycles.Select(c => c.LoadingSeconds + c.RunningSeconds).ToList();
+            double avgCycleTime = cycleTimes.Average();
+            int maxCycleTime = cycleTimes.Max();
+            int minCycleTime = cycleTimes.Min();
+
+            // 특이사항: 평균보다 20% 이상 긴 사이클
+            double threshold = avgCycleTime * 1.2;
+            var anomalies = cycles.Where(c => (c.LoadingSeconds + c.RunningSeconds) > threshold).ToList();
+
+            return new CycleReport
+            {
+                HasData = true,
+                TotalCycles = cycles.Count,
+                AvgCycleTime = (int)Math.Round(avgCycleTime),
+                MaxCycleTime = maxCycleTime,
+                MinCycleTime = minCycleTime,
+                AnomalyCount = anomalies.Count,
+                Anomalies = anomalies
+            };
+        }
+    }
+
+    // ==================== 사이클 로그 관련 클래스 ====================
+
+    public class CycleStateLog
+    {
+        public string IpAddress { get; set; }
+        public DateTime ShiftDate { get; set; }
+        public ShiftType ShiftType { get; set; }
+        public MachineState State { get; set; }
+        public int DurationSeconds { get; set; }
+        public DateTime Timestamp { get; set; }
+        public int? CycleNumber { get; set; }
+    }
+
+    public class CycleData
+    {
+        public DateTime StartTime { get; set; }
+        public DateTime EndTime { get; set; }
+        public int LoadingSeconds { get; set; }
+        public int RunningSeconds { get; set; }
+        public int TotalSeconds => LoadingSeconds + RunningSeconds;
+    }
+
+    public class CycleReport
+    {
+        public bool HasData { get; set; }
+        public int TotalCycles { get; set; }
+        public int AvgCycleTime { get; set; }
+        public int MaxCycleTime { get; set; }
+        public int MinCycleTime { get; set; }
+        public int AnomalyCount { get; set; }
+        public List<CycleData> Anomalies { get; set; } = new List<CycleData>();
     }
 }

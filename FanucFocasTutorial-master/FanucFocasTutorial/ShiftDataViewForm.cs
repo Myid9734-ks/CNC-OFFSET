@@ -17,6 +17,7 @@ namespace FanucFocasTutorial
         private Label _lblTotalRunning;
         private Label _lblAvgOperationRate;
         private Label _lblTotalProduction;
+        private TextBox _txtCycleReport;
         private LogDataService _logService;
 
         public ShiftDataViewForm()
@@ -239,6 +240,42 @@ namespace FanucFocasTutorial
                 Padding = new Padding(20, 10, 20, 10)
             };
 
+            // 리포트 텍스트 박스 패널 (데이터 그리드와 리포트 비율: 36% : 64%)
+            // 남은 공간 계산: 700(폼 높이) - 80(상단) - 60(하단) = 560px
+            // 리포트: 560 * 0.64 = 358px
+            Panel reportPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 358,
+                BackColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Padding = new Padding(10)
+            };
+
+            Label lblReport = new Label
+            {
+                Text = "제품 사이클 리포트:",
+                Dock = DockStyle.Top,
+                Height = 25,
+                Font = new Font("맑은 고딕", 10f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(60, 120, 180)
+            };
+
+            _txtCycleReport = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                Font = new Font("맑은 고딕", 9f),
+                BackColor = Color.White,
+                BorderStyle = BorderStyle.None,
+                Text = "조회 버튼을 클릭하면 제품 사이클 리포트가 표시됩니다."
+            };
+
+            reportPanel.Controls.Add(_txtCycleReport);
+            reportPanel.Controls.Add(lblReport);
+
             _lblTotalRunning = new Label
             {
                 Text = "총 실가공: 00:00:00",
@@ -270,10 +307,11 @@ namespace FanucFocasTutorial
                 _lblTotalRunning, _lblAvgOperationRate, _lblTotalProduction
             });
 
-            // 폼에 컨트롤 추가
+            // 폼에 컨트롤 추가 (순서 중요: Bottom Dock은 나중에 추가된 것이 위에 표시됨)
             this.Controls.Add(_dataGridView);
-            this.Controls.Add(topPanel);
-            this.Controls.Add(bottomPanel);
+            this.Controls.Add(bottomPanel);  // 가장 아래
+            this.Controls.Add(reportPanel);  // bottomPanel 위
+            this.Controls.Add(topPanel);     // 가장 위
         }
 
         private void LoadIpAddresses()
@@ -339,10 +377,83 @@ namespace FanucFocasTutorial
 
                 // 요약 통계 업데이트
                 UpdateSummary(data);
+
+                // 사이클 리포트 생성 및 표시
+                UpdateCycleReport(data, ipFilter, shiftTypeFilter);
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"데이터 조회 실패: {ex.Message}", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void UpdateCycleReport(List<ShiftStateData> shiftData, string ipFilter, ShiftType? shiftTypeFilter)
+        {
+            try
+            {
+                var reportText = new System.Text.StringBuilder();
+                reportText.AppendLine("=".PadRight(80, '='));
+                reportText.AppendLine("제품 사이클 리포트");
+                reportText.AppendLine("=".PadRight(80, '='));
+                reportText.AppendLine();
+
+                // IP별, 근무조별 리포트 생성
+                var ipGroups = shiftData.GroupBy(d => d.IpAddress);
+                bool hasReport = false;
+
+                foreach (var ipGroup in ipGroups)
+                {
+                    string ip = ipGroup.Key;
+                    if (ipFilter != null && ip != ipFilter) continue;
+
+                    var shiftGroups = ipGroup.GroupBy(d => new { d.ShiftDate, d.ShiftType });
+                    
+                    foreach (var shiftGroup in shiftGroups)
+                    {
+                        if (shiftTypeFilter.HasValue && shiftGroup.Key.ShiftType != shiftTypeFilter.Value) continue;
+
+                        var report = _logService.GenerateCycleReport(ip, shiftGroup.Key.ShiftDate, shiftGroup.Key.ShiftType);
+                        
+                        if (report.HasData)
+                        {
+                            hasReport = true;
+                            reportText.AppendLine($"[{ip}] {shiftGroup.Key.ShiftDate:yyyy-MM-dd} {shiftGroup.Key.ShiftType}");
+                            reportText.AppendLine($"  총 사이클 수: {report.TotalCycles}개");
+                            reportText.AppendLine($"  평균 사이클 시간: {FormatTime(report.AvgCycleTime)}");
+                            reportText.AppendLine($"  최대 사이클 시간: {FormatTime(report.MaxCycleTime)}");
+                            reportText.AppendLine($"  최소 사이클 시간: {FormatTime(report.MinCycleTime)}");
+                            reportText.AppendLine($"  특이사항 (평균의 120% 초과): {report.AnomalyCount}건");
+                            
+                            if (report.Anomalies.Count > 0)
+                            {
+                                reportText.AppendLine();
+                                reportText.AppendLine("  [특이사항 상세]");
+                                foreach (var anomaly in report.Anomalies.Take(10)) // 최대 10개만 표시
+                                {
+                                    reportText.AppendLine($"    - {anomaly.StartTime:HH:mm:ss} ~ {anomaly.EndTime:HH:mm:ss} " +
+                                        $"(로딩: {FormatTime(anomaly.LoadingSeconds)}, 가공: {FormatTime(anomaly.RunningSeconds)}, " +
+                                        $"총: {FormatTime(anomaly.TotalSeconds)})");
+                                }
+                                if (report.Anomalies.Count > 10)
+                                {
+                                    reportText.AppendLine($"    ... 외 {report.Anomalies.Count - 10}건");
+                                }
+                            }
+                            reportText.AppendLine();
+                        }
+                    }
+                }
+
+                if (!hasReport)
+                {
+                    reportText.AppendLine("리포트 데이터가 없습니다.");
+                }
+
+                _txtCycleReport.Text = reportText.ToString();
+            }
+            catch (Exception ex)
+            {
+                _txtCycleReport.Text = $"리포트 생성 오류: {ex.Message}";
             }
         }
 
