@@ -375,7 +375,7 @@ namespace FanucFocasTutorial
 
         private double CalculateOperationRate(ShiftStateData data)
         {
-            int total = data.RunningSeconds + data.LoadingSeconds + data.AlarmSeconds + data.IdleSeconds;
+            int total = data.RunningSeconds + data.LoadingSeconds + data.AlarmSeconds + data.IdleSeconds + data.UnmeasuredSeconds;
             if (total == 0) return 0;
             return (double)data.RunningSeconds / total * 100;
         }

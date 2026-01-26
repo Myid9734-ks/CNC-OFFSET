@@ -164,6 +164,7 @@ namespace FanucFocasTutorial
         private string _prevInput = "";
         private string _prevAlarm = "";
         private string _prevIdle = "";
+        private string _prevUnmeasured = "";
         private string _prevOperationRate = "";
         private string _prevProduction = "";
 
@@ -177,14 +178,17 @@ namespace FanucFocasTutorial
         private TableLayoutPanel _pnlInput;
         private TableLayoutPanel _pnlAlarm;
         private TableLayoutPanel _pnlIdle;
+        private TableLayoutPanel _pnlUnmeasured;
         private Label _lblActualWorking;  // 상태 라벨 (색상 변경용)
         private Label _lblInput;
         private Label _lblAlarm;
         private Label _lblIdle;
+        private Label _lblUnmeasured;
         private Label _lblActualWorkingTime;
         private Label _lblInputTime;
         private Label _lblAlarmTime;
         private Label _lblIdleTime;
+        private Label _lblUnmeasuredTime;
         private Label _lblOperationRate;
         private Label _lblProduction;
 
@@ -315,7 +319,7 @@ namespace FanucFocasTutorial
             {
                 Dock = DockStyle.Fill,
                 RowCount = 1,
-                ColumnCount = 5,
+                ColumnCount = 6,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
                 Padding = new Padding(5)
             };
@@ -324,16 +328,17 @@ namespace FanucFocasTutorial
             _contentLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));  // 통합 지표
 
             // 열 비율
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 6; i++)
             {
-                _contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
+                _contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16.67F));
             }
 
-            // Row 0: 통합 지표 (5개 카드)
+            // Row 0: 통합 지표 (6개 카드)
             _pnlActualWorking = CreateMetricCard("가공", "00:00:00", Color.LightGray, out _lblActualWorking, out _lblActualWorkingTime);
             _pnlInput = CreateMetricCard("투입", "00:00:00", Color.LightGray, out _lblInput, out _lblInputTime);
             _pnlAlarm = CreateMetricCard("알람", "00:00:00", Color.LightGray, out _lblAlarm, out _lblAlarmTime);
             _pnlIdle = CreateMetricCard("유휴", "00:00:00", Color.LightGray, out _lblIdle, out _lblIdleTime);
+            _pnlUnmeasured = CreateMetricCard("미측정", "00:00:00", Color.FromArgb(220, 220, 220), out _lblUnmeasured, out _lblUnmeasuredTime);
 
             // 가동률 + 생산수량을 하나의 패널에
             var metricsPanel = new TableLayoutPanel
@@ -355,7 +360,8 @@ namespace FanucFocasTutorial
             _contentLayout.Controls.Add(_pnlInput, 1, 0);
             _contentLayout.Controls.Add(_pnlAlarm, 2, 0);
             _contentLayout.Controls.Add(_pnlIdle, 3, 0);
-            _contentLayout.Controls.Add(metricsPanel, 4, 0);
+            _contentLayout.Controls.Add(_pnlUnmeasured, 4, 0);
+            _contentLayout.Controls.Add(metricsPanel, 5, 0);
 
             // 컨트롤 추가
             this.Controls.Add(_contentLayout);
@@ -559,10 +565,11 @@ namespace FanucFocasTutorial
 
             // 통합 지표 계산
             int actualWorking = runningTotal;
-            int input = runningTotal + loadingTotal;
+            int input = loadingTotal;  // 투입시간 = Loading (제품교체 시간만)
             int alarm = alarmTotal;
             int idle = idleTotal;
-            int total = runningTotal + loadingTotal + idleTotal + alarmTotal;
+            int unmeasured = _shiftStateData.UnmeasuredSeconds;
+            int total = runningTotal + loadingTotal + idleTotal + alarmTotal + unmeasured;
             double operationRate = total > 0 ? (double)actualWorking / total * 100 : 0;
 
             // 시간 텍스트
@@ -570,6 +577,7 @@ namespace FanucFocasTutorial
             string inputText = FormatDuration(input);
             string alarmText = FormatDuration(alarm);
             string idleText = FormatDuration(idle);
+            string unmeasuredText = FormatDuration(unmeasured);
             string operationRateText = $"가동률: {operationRate:F1}%";
             int productionCount = _connection.GetProductionCount();
             string productionText = $"생산: {productionCount}개";
@@ -579,6 +587,7 @@ namespace FanucFocasTutorial
             _lblInput.BackColor = Color.LightGray;
             _lblAlarm.BackColor = Color.LightGray;
             _lblIdle.BackColor = Color.LightGray;
+            _lblUnmeasured.BackColor = Color.FromArgb(220, 220, 220);
 
             // 현재 상태에 따라 해당 라벨만 강조
             switch (currentState)
@@ -617,6 +626,11 @@ namespace FanucFocasTutorial
             {
                 _lblIdleTime.Text = idleText;
                 _prevIdle = idleText;
+            }
+            if (unmeasuredText != _prevUnmeasured)
+            {
+                _lblUnmeasuredTime.Text = unmeasuredText;
+                _prevUnmeasured = unmeasuredText;
             }
             if (operationRateText != _prevOperationRate)
             {
@@ -797,6 +811,7 @@ namespace FanucFocasTutorial
                     LoadingSeconds = 0,
                     AlarmSeconds = 0,
                     IdleSeconds = 0,
+                    UnmeasuredSeconds = 0,
                     ProductionCount = 0
                 };
 
@@ -871,6 +886,38 @@ namespace FanucFocasTutorial
 
                 if (savedData != null)
                 {
+                    // 마지막 업데이트 시간 조회
+                    var lastUpdatedTime = logService.GetLastUpdatedTime(
+                        _connection.IpAddress,
+                        _currentShift.StartTime.Date,
+                        _currentShift.Type);
+
+                    // 미측정 시간 계산: 마지막 업데이트 ~ 현재 시간
+                    if (lastUpdatedTime.HasValue)
+                    {
+                        DateTime now = DateTime.Now;
+
+                        // 현재 시간이 같은 근무조 내에 있는지 확인
+                        if (now >= _currentShift.StartTime && now < _currentShift.EndTime)
+                        {
+                            TimeSpan unmeasuredGap = now - lastUpdatedTime.Value;
+
+                            // 음수 방지 (시간이 잘못된 경우)
+                            if (unmeasuredGap.TotalSeconds > 0)
+                            {
+                                int additionalUnmeasured = (int)unmeasuredGap.TotalSeconds;
+                                savedData.UnmeasuredSeconds += additionalUnmeasured;
+                                
+                                // 미측정 시간 계산 후 즉시 DB에 저장
+                                logService.UpdateShiftStateData(savedData);
+                                
+                                WriteStateLog($"[{_connection.IpAddress}] 미측정 시간 추가 및 DB 저장: " +
+                                    $"{FormatDuration(additionalUnmeasured)} " +
+                                    $"(마지막 업데이트: {lastUpdatedTime.Value:yyyy-MM-dd HH:mm:ss})");
+                            }
+                        }
+                    }
+
                     // DB에서 복원
                     _shiftStateData = savedData;
                     _stateDurations[MachineState.Running] = savedData.RunningSeconds;
@@ -890,6 +937,7 @@ namespace FanucFocasTutorial
                         $"투입={FormatDuration(savedData.LoadingSeconds)}, " +
                         $"알람={FormatDuration(savedData.AlarmSeconds)}, " +
                         $"유휴={FormatDuration(savedData.IdleSeconds)}, " +
+                        $"미측정={FormatDuration(savedData.UnmeasuredSeconds)}, " +
                         $"생산={savedData.ProductionCount}개");
                 }
                 else
@@ -905,6 +953,7 @@ namespace FanucFocasTutorial
                         LoadingSeconds = 0,
                         AlarmSeconds = 0,
                         IdleSeconds = 0,
+                        UnmeasuredSeconds = 0,
                         ProductionCount = 0
                     };
 
@@ -924,6 +973,7 @@ namespace FanucFocasTutorial
                     LoadingSeconds = 0,
                     AlarmSeconds = 0,
                     IdleSeconds = 0,
+                    UnmeasuredSeconds = 0,
                     ProductionCount = 0
                 };
 

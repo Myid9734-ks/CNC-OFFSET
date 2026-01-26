@@ -3663,40 +3663,36 @@ namespace FanucFocasTutorial
                 progressForm.Controls.Add(statusLabel);
                 progressForm.Controls.Add(progressBar);
 
-                // 비동기 백업 실행
+                // UI 스레드에서 백업 실행 (FOCAS 핸들은 스레드 간 공유 불가)
                 BackupService backupService = new BackupService(connection);
                 Dictionary<string, string> results = null;
                 Exception backupException = null;
 
-                System.Threading.Thread backupThread = new System.Threading.Thread(() =>
-                {
-                    try
-                    {
-                        results = backupService.BackupAllNCPrograms((current, total, message) =>
-                        {
-                            // UI 스레드에서 업데이트
-                            progressForm.Invoke(new Action(() =>
-                            {
-                                progressBar.Maximum = total;
-                                progressBar.Value = current;
-                                statusLabel.Text = $"{message}\n진행: {current}/{total} ({(current * 100 / total)}%)";
-                            }));
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        backupException = ex;
-                    }
-                    finally
-                    {
-                        // 다이얼로그 닫기
-                        progressForm.Invoke(new Action(() => progressForm.Close()));
-                    }
-                });
+                // 프로그레스 폼을 모달리스로 표시
+                progressForm.Show(this);
 
-                backupThread.Start();
-                progressForm.ShowDialog();
-                backupThread.Join();
+                try
+                {
+                    // UI 스레드에서 직접 백업 실행
+                    results = backupService.BackupAllNCPrograms((current, total, message) =>
+                    {
+                        // UI 업데이트
+                        progressBar.Maximum = total;
+                        progressBar.Value = current;
+                        statusLabel.Text = $"{message}\n진행: {current}/{total} ({(current * 100 / total)}%)";
+
+                        // UI 응답성 유지
+                        Application.DoEvents();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    backupException = ex;
+                }
+                finally
+                {
+                    progressForm.Close();
+                }
 
                 // 예외 발생 시 처리
                 if (backupException != null)
@@ -3832,29 +3828,24 @@ namespace FanucFocasTutorial
                 progressForm.Controls.Add(progressBar);
 
                 BackupService backupService = new BackupService(connection);
-                string filePath = "";
 
-                // 백그라운드에서 백업 실행
-                System.Threading.Tasks.Task.Run(() =>
+                // UI 스레드에서 백업 실행 (FOCAS 핸들은 스레드 간 공유 불가)
+                progressForm.Show(this);
+
+                string filePath = "";
+                try
                 {
                     filePath = backupService.BackupParameter((current, total) =>
                     {
-                        // UI 스레드에서 업데이트
-                        this.Invoke((MethodInvoker)delegate
-                        {
-                            progressBar.Value = current;
-                            progressLabel.Text = $"백업 중... {current} / {total}";
-                        });
+                        progressBar.Value = current;
+                        progressLabel.Text = $"백업 중... {current} / {total}";
+                        Application.DoEvents();  // UI 응답성 유지
                     });
-
-                    // 완료 후 폼 닫기
-                    this.Invoke((MethodInvoker)delegate
-                    {
-                        progressForm.Close();
-                    });
-                });
-
-                progressForm.ShowDialog(this);
+                }
+                finally
+                {
+                    progressForm.Close();
+                }
 
                 MessageBox.Show($"파라미터 백업 완료!\n저장 위치: {filePath}", "백업 성공", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }

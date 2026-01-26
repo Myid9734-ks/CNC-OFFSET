@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.SQLite;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace FanucFocasTutorial
 {
@@ -152,14 +153,35 @@ namespace FanucFocasTutorial
                         LoadingSeconds INTEGER NOT NULL,
                         AlarmSeconds INTEGER NOT NULL,
                         IdleSeconds INTEGER NOT NULL,
+                        UnmeasuredSeconds INTEGER NOT NULL DEFAULT 0,
                         ProductionCount INTEGER NOT NULL,
-                        CreatedAt TEXT NOT NULL
+                        CreatedAt TEXT NOT NULL,
+                        LastUpdatedAt TEXT
                     )";
 
                 using (var cmd = new SQLiteCommand(createShiftStateLogTable, conn))
                 {
                     cmd.ExecuteNonQuery();
                 }
+
+                // 기존 ShiftStateLogs 테이블에 UnmeasuredSeconds, LastUpdatedAt 컬럼 추가
+                try
+                {
+                    using (var cmd = new SQLiteCommand("ALTER TABLE ShiftStateLogs ADD COLUMN UnmeasuredSeconds INTEGER NOT NULL DEFAULT 0", conn))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                catch { } // 컬럼이 이미 존재하면 무시
+
+                try
+                {
+                    using (var cmd = new SQLiteCommand("ALTER TABLE ShiftStateLogs ADD COLUMN LastUpdatedAt TEXT", conn))
+                    {
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                catch { } // 컬럼이 이미 존재하면 무시
 
                 // 인덱스 생성
                 string createIndexes = @"
@@ -541,11 +563,11 @@ namespace FanucFocasTutorial
                 string sql = @"
                     INSERT INTO ShiftStateLogs
                     (IpAddress, ShiftDate, ShiftType, IsExtended,
-                     RunningSeconds, LoadingSeconds, AlarmSeconds, IdleSeconds,
-                     ProductionCount, CreatedAt)
+                     RunningSeconds, LoadingSeconds, AlarmSeconds, IdleSeconds, UnmeasuredSeconds,
+                     ProductionCount, CreatedAt, LastUpdatedAt)
                     VALUES (@IpAddress, @ShiftDate, @ShiftType, @IsExtended,
-                            @RunningSeconds, @LoadingSeconds, @AlarmSeconds, @IdleSeconds,
-                            @ProductionCount, @CreatedAt)";
+                            @RunningSeconds, @LoadingSeconds, @AlarmSeconds, @IdleSeconds, @UnmeasuredSeconds,
+                            @ProductionCount, @CreatedAt, @LastUpdatedAt)";
 
                 using (var cmd = new SQLiteCommand(sql, conn))
                 {
@@ -557,8 +579,10 @@ namespace FanucFocasTutorial
                     cmd.Parameters.AddWithValue("@LoadingSeconds", data.LoadingSeconds);
                     cmd.Parameters.AddWithValue("@AlarmSeconds", data.AlarmSeconds);
                     cmd.Parameters.AddWithValue("@IdleSeconds", data.IdleSeconds);
+                    cmd.Parameters.AddWithValue("@UnmeasuredSeconds", data.UnmeasuredSeconds);
                     cmd.Parameters.AddWithValue("@ProductionCount", data.ProductionCount);
                     cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now.ToString("o"));
+                    cmd.Parameters.AddWithValue("@LastUpdatedAt", DateTime.Now.ToString("o"));
 
                     cmd.ExecuteNonQuery();
                 }
@@ -602,6 +626,7 @@ namespace FanucFocasTutorial
                                 LoadingSeconds = Convert.ToInt32(reader["LoadingSeconds"]),
                                 AlarmSeconds = Convert.ToInt32(reader["AlarmSeconds"]),
                                 IdleSeconds = Convert.ToInt32(reader["IdleSeconds"]),
+                                UnmeasuredSeconds = reader["UnmeasuredSeconds"] != DBNull.Value ? Convert.ToInt32(reader["UnmeasuredSeconds"]) : 0,
                                 ProductionCount = Convert.ToInt32(reader["ProductionCount"])
                             };
                         }
@@ -623,16 +648,20 @@ namespace FanucFocasTutorial
             {
                 conn.Open();
 
+                // C#에서 날짜 계산 후 SQL에 전달
+                DateTime startDate = DateTime.Today.AddDays(-days);
+                string startDateStr = startDate.ToString("yyyy-MM-dd");
+
                 string sql = @"
                     SELECT * FROM ShiftStateLogs
                     WHERE IpAddress = @IpAddress
-                      AND ShiftDate >= DATE('now', @DaysAgo)
+                      AND ShiftDate >= @StartDate
                     ORDER BY ShiftDate DESC, ShiftType";
 
                 using (var cmd = new SQLiteCommand(sql, conn))
                 {
                     cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
-                    cmd.Parameters.AddWithValue("@DaysAgo", $"-{days} days");
+                    cmd.Parameters.AddWithValue("@StartDate", startDateStr);
 
                     using (var reader = cmd.ExecuteReader())
                     {
@@ -648,6 +677,7 @@ namespace FanucFocasTutorial
                                 LoadingSeconds = Convert.ToInt32(reader["LoadingSeconds"]),
                                 AlarmSeconds = Convert.ToInt32(reader["AlarmSeconds"]),
                                 IdleSeconds = Convert.ToInt32(reader["IdleSeconds"]),
+                                UnmeasuredSeconds = reader["UnmeasuredSeconds"] != DBNull.Value ? Convert.ToInt32(reader["UnmeasuredSeconds"]) : 0,
                                 ProductionCount = Convert.ToInt32(reader["ProductionCount"])
                             });
                         }
@@ -689,61 +719,169 @@ namespace FanucFocasTutorial
         public List<ShiftStateData> GetShiftDataByFilter(DateTime startDate, DateTime endDate, string ipAddress = null, ShiftType? shiftType = null)
         {
             var result = new List<ShiftStateData>();
+            string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ShiftSearch_Debug.txt");
 
-            using (var conn = new SQLiteConnection(_connectionString))
+            try
             {
-                conn.Open();
+                // 검색 시작 로그
+                string logMessage = $"\n{"=".PadRight(80, '=')}\n";
+                logMessage += $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 근무조 데이터 검색 시작\n";
+                logMessage += $"  검색 범위: {startDate:yyyy-MM-dd} ~ {endDate:yyyy-MM-dd}\n";
+                logMessage += $"  IP 필터: {(string.IsNullOrEmpty(ipAddress) ? "전체" : ipAddress)}\n";
+                logMessage += $"  근무조 필터: {(shiftType.HasValue ? shiftType.Value.ToString() : "전체")}\n";
+                File.AppendAllText(logPath, logMessage, Encoding.UTF8);
 
-                string sql = @"
-                    SELECT * FROM ShiftStateLogs
-                    WHERE ShiftDate >= @StartDate AND ShiftDate <= @EndDate";
-
-                if (!string.IsNullOrEmpty(ipAddress))
+                using (var conn = new SQLiteConnection(_connectionString))
                 {
-                    sql += " AND IpAddress = @IpAddress";
-                }
+                    conn.Open();
 
-                if (shiftType.HasValue)
-                {
-                    sql += " AND ShiftType = @ShiftType";
-                }
+                    // 날짜를 yyyy-MM-dd 형식으로 변환
+                    string startDateStr = startDate.Date.ToString("yyyy-MM-dd");
+                    string endDateStr = endDate.Date.ToString("yyyy-MM-dd");
 
-                sql += " ORDER BY ShiftDate DESC, IpAddress, ShiftType";
+                    // 야간 근무조는 자정을 넘어가므로 검색 범위 확장
+                    // 야간 근무조: 20:30 ~ 다음날 08:30이므로, ShiftDate는 시작 날짜로 저장됨
+                    // 예: 2025-01-26 20:30 시작 → ShiftDate = 2025-01-26
+                    // 하지만 실제로는 2025-01-27 08:30까지이므로, 2025-01-27로 검색해도 나와야 함
+                    // 따라서 야간 근무조 검색 시 시작일 하루 전부터 검색
+                    string extendedStartDateStr = startDate.Date.AddDays(-1).ToString("yyyy-MM-dd");
 
-                using (var cmd = new SQLiteCommand(sql, conn))
-                {
-                    cmd.Parameters.AddWithValue("@StartDate", startDate.ToString("yyyy-MM-dd"));
-                    cmd.Parameters.AddWithValue("@EndDate", endDate.ToString("yyyy-MM-dd"));
+                    File.AppendAllText(logPath, $"  날짜 변환: StartDate={startDateStr}, EndDate={endDateStr}, ExtendedStartDate={extendedStartDateStr}\n", Encoding.UTF8);
+
+                    // SQL 쿼리: 야간 근무조는 확장된 범위에서 검색
+                    string sql = @"
+                        SELECT * FROM ShiftStateLogs
+                        WHERE (
+                            -- 주간 근무조: 일반 범위
+                            (ShiftType = 'Day' AND ShiftDate >= @StartDate AND ShiftDate <= @EndDate)
+                            OR
+                            -- 야간 근무조: 확장된 범위 (시작일 하루 전부터)
+                            (ShiftType = 'Night' AND ShiftDate >= @ExtendedStartDate AND ShiftDate <= @EndDate)
+                        )";
 
                     if (!string.IsNullOrEmpty(ipAddress))
                     {
-                        cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
+                        sql += " AND IpAddress = @IpAddress";
                     }
 
                     if (shiftType.HasValue)
                     {
-                        cmd.Parameters.AddWithValue("@ShiftType", shiftType.Value.ToString());
+                        sql += " AND ShiftType = @ShiftType";
                     }
 
-                    using (var reader = cmd.ExecuteReader())
+                    sql += " ORDER BY ShiftDate DESC, IpAddress, ShiftType";
+
+                    File.AppendAllText(logPath, $"  SQL 쿼리:\n{sql}\n", Encoding.UTF8);
+
+                    int rawCount = 0;
+                    int dayCount = 0;
+                    int nightCount = 0;
+                    int filteredOutCount = 0;
+
+                    using (var cmd = new SQLiteCommand(sql, conn))
                     {
-                        while (reader.Read())
+                        cmd.Parameters.AddWithValue("@StartDate", startDateStr);
+                        cmd.Parameters.AddWithValue("@EndDate", endDateStr);
+                        cmd.Parameters.AddWithValue("@ExtendedStartDate", extendedStartDateStr);
+
+                        if (!string.IsNullOrEmpty(ipAddress))
                         {
-                            result.Add(new ShiftStateData
+                            cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
+                        }
+
+                        if (shiftType.HasValue)
+                        {
+                            cmd.Parameters.AddWithValue("@ShiftType", shiftType.Value.ToString());
+                        }
+
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
                             {
-                                IpAddress = reader["IpAddress"].ToString(),
-                                ShiftDate = DateTime.Parse(reader["ShiftDate"].ToString()),
-                                ShiftType = (ShiftType)Enum.Parse(typeof(ShiftType), reader["ShiftType"].ToString()),
-                                IsExtended = Convert.ToInt32(reader["IsExtended"]) == 1,
-                                RunningSeconds = Convert.ToInt32(reader["RunningSeconds"]),
-                                LoadingSeconds = Convert.ToInt32(reader["LoadingSeconds"]),
-                                AlarmSeconds = Convert.ToInt32(reader["AlarmSeconds"]),
-                                IdleSeconds = Convert.ToInt32(reader["IdleSeconds"]),
-                                ProductionCount = Convert.ToInt32(reader["ProductionCount"])
-                            });
+                                rawCount++;
+                                try
+                                {
+                                    var shiftData = new ShiftStateData
+                                    {
+                                        IpAddress = reader["IpAddress"].ToString(),
+                                        ShiftDate = DateTime.Parse(reader["ShiftDate"].ToString()),
+                                        ShiftType = (ShiftType)Enum.Parse(typeof(ShiftType), reader["ShiftType"].ToString()),
+                                        IsExtended = Convert.ToInt32(reader["IsExtended"]) == 1,
+                                        RunningSeconds = Convert.ToInt32(reader["RunningSeconds"]),
+                                        LoadingSeconds = Convert.ToInt32(reader["LoadingSeconds"]),
+                                        AlarmSeconds = Convert.ToInt32(reader["AlarmSeconds"]),
+                                        IdleSeconds = Convert.ToInt32(reader["IdleSeconds"]),
+                                        UnmeasuredSeconds = reader["UnmeasuredSeconds"] != DBNull.Value ? Convert.ToInt32(reader["UnmeasuredSeconds"]) : 0,
+                                        ProductionCount = Convert.ToInt32(reader["ProductionCount"])
+                                    };
+
+                                    // 야간 근무조 필터링: ShiftDate+1일이 검색 범위 내에 있는지 확인
+                                    if (shiftData.ShiftType == ShiftType.Night)
+                                    {
+                                        DateTime shiftEndDate = shiftData.ShiftDate.AddDays(1);
+                                        // 야간 근무조는 ShiftDate 날짜의 20:30부터 다음날 08:30까지
+                                        // 따라서 ShiftDate 또는 ShiftDate+1일이 검색 범위 내에 있으면 포함
+                                        if (shiftData.ShiftDate <= endDate.Date && shiftEndDate >= startDate.Date)
+                                        {
+                                            result.Add(shiftData);
+                                            nightCount++;
+                                            File.AppendAllText(logPath, $"  [야간] 포함: {shiftData.ShiftDate:yyyy-MM-dd} ({shiftData.IpAddress}) - ShiftDate={shiftData.ShiftDate:yyyy-MM-dd}, ShiftEndDate={shiftEndDate:yyyy-MM-dd}\n", Encoding.UTF8);
+                                        }
+                                        else
+                                        {
+                                            filteredOutCount++;
+                                            File.AppendAllText(logPath, $"  [야간] 제외: {shiftData.ShiftDate:yyyy-MM-dd} ({shiftData.IpAddress}) - ShiftDate={shiftData.ShiftDate:yyyy-MM-dd}, ShiftEndDate={shiftEndDate:yyyy-MM-dd} (범위 밖)\n", Encoding.UTF8);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // 주간 근무조는 일반적인 범위 체크
+                                        if (shiftData.ShiftDate >= startDate.Date && shiftData.ShiftDate <= endDate.Date)
+                                        {
+                                            result.Add(shiftData);
+                                            dayCount++;
+                                            File.AppendAllText(logPath, $"  [주간] 포함: {shiftData.ShiftDate:yyyy-MM-dd} ({shiftData.IpAddress})\n", Encoding.UTF8);
+                                        }
+                                        else
+                                        {
+                                            filteredOutCount++;
+                                            File.AppendAllText(logPath, $"  [주간] 제외: {shiftData.ShiftDate:yyyy-MM-dd} ({shiftData.IpAddress}) - 범위 밖\n", Encoding.UTF8);
+                                        }
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    // 개별 레코드 파싱 오류는 로그만 남기고 계속 진행
+                                    string errorMsg = $"  [오류] 레코드 파싱 실패: {ex.Message}\n";
+                                    File.AppendAllText(logPath, errorMsg, Encoding.UTF8);
+                                    System.Diagnostics.Debug.WriteLine($"근무조 데이터 파싱 오류: {ex.Message}");
+                                }
+                            }
                         }
                     }
+
+                    // 검색 결과 요약 로그
+                    string summaryLog = $"\n  검색 결과 요약:\n";
+                    summaryLog += $"    SQL 조회 결과: {rawCount}개\n";
+                    summaryLog += $"    주간 근무조: {dayCount}개\n";
+                    summaryLog += $"    야간 근무조: {nightCount}개\n";
+                    summaryLog += $"    필터링 제외: {filteredOutCount}개\n";
+                    summaryLog += $"    최종 결과: {result.Count}개\n";
+                    summaryLog += $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 근무조 데이터 검색 완료\n";
+                    summaryLog += $"{"=".PadRight(80, '=')}\n";
+                    File.AppendAllText(logPath, summaryLog, Encoding.UTF8);
                 }
+            }
+            catch (Exception ex)
+            {
+                // 전체 쿼리 오류는 예외를 다시 던짐
+                string errorLog = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 근무조 데이터 조회 오류 발생\n";
+                errorLog += $"  오류 메시지: {ex.Message}\n";
+                errorLog += $"  스택 트레이스: {ex.StackTrace}\n";
+                errorLog += $"{"=".PadRight(80, '=')}\n";
+                File.AppendAllText(logPath, errorLog, Encoding.UTF8);
+                System.Diagnostics.Debug.WriteLine($"근무조 데이터 조회 오류: {ex.Message}");
+                throw;
             }
 
             return result;
@@ -773,6 +911,151 @@ namespace FanucFocasTutorial
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 근무조 데이터 총 개수 조회 (디버깅용)
+        /// </summary>
+        public int GetShiftDataCount()
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                string sql = "SELECT COUNT(*) FROM ShiftStateLogs";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    return Convert.ToInt32(cmd.ExecuteScalar());
+                }
+            }
+        }
+
+        /// <summary>
+        /// 날짜 범위 내 근무조 데이터 개수 조회 (디버깅용)
+        /// </summary>
+        public int GetShiftDataCountByDateRange(DateTime startDate, DateTime endDate)
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                string startDateStr = startDate.Date.ToString("yyyy-MM-dd");
+                string endDateStr = endDate.Date.ToString("yyyy-MM-dd");
+
+                string sql = @"
+                    SELECT COUNT(*) FROM ShiftStateLogs
+                    WHERE ShiftDate >= @StartDate AND ShiftDate <= @EndDate";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@StartDate", startDateStr);
+                    cmd.Parameters.AddWithValue("@EndDate", endDateStr);
+                    return Convert.ToInt32(cmd.ExecuteScalar());
+                }
+            }
+        }
+
+        /// <summary>
+        /// 근무조 데이터 업데이트 (미측정 시간 포함)
+        /// </summary>
+        public void UpdateShiftStateData(ShiftStateData data)
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                // 먼저 최신 레코드의 ID를 찾음
+                string findIdSql = @"
+                    SELECT Id FROM ShiftStateLogs
+                    WHERE IpAddress = @IpAddress
+                      AND ShiftDate = @ShiftDate
+                      AND ShiftType = @ShiftType
+                    ORDER BY CreatedAt DESC
+                    LIMIT 1";
+
+                int? recordId = null;
+                using (var findCmd = new SQLiteCommand(findIdSql, conn))
+                {
+                    findCmd.Parameters.AddWithValue("@IpAddress", data.IpAddress);
+                    findCmd.Parameters.AddWithValue("@ShiftDate", data.ShiftDate.ToString("yyyy-MM-dd"));
+                    findCmd.Parameters.AddWithValue("@ShiftType", data.ShiftType.ToString());
+                    
+                    var result = findCmd.ExecuteScalar();
+                    if (result != null && result != DBNull.Value)
+                    {
+                        recordId = Convert.ToInt32(result);
+                    }
+                }
+
+                if (recordId.HasValue)
+                {
+                    // 레코드가 있으면 UPDATE
+                    string updateSql = @"
+                        UPDATE ShiftStateLogs
+                        SET RunningSeconds = @RunningSeconds,
+                            LoadingSeconds = @LoadingSeconds,
+                            AlarmSeconds = @AlarmSeconds,
+                            IdleSeconds = @IdleSeconds,
+                            UnmeasuredSeconds = @UnmeasuredSeconds,
+                            ProductionCount = @ProductionCount,
+                            LastUpdatedAt = @LastUpdatedAt
+                        WHERE Id = @Id";
+
+                    using (var cmd = new SQLiteCommand(updateSql, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@Id", recordId.Value);
+                        cmd.Parameters.AddWithValue("@RunningSeconds", data.RunningSeconds);
+                        cmd.Parameters.AddWithValue("@LoadingSeconds", data.LoadingSeconds);
+                        cmd.Parameters.AddWithValue("@AlarmSeconds", data.AlarmSeconds);
+                        cmd.Parameters.AddWithValue("@IdleSeconds", data.IdleSeconds);
+                        cmd.Parameters.AddWithValue("@UnmeasuredSeconds", data.UnmeasuredSeconds);
+                        cmd.Parameters.AddWithValue("@ProductionCount", data.ProductionCount);
+                        cmd.Parameters.AddWithValue("@LastUpdatedAt", DateTime.Now.ToString("o"));
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                else
+                {
+                    // 레코드가 없으면 INSERT
+                    SaveShiftStateData(data);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 특정 근무조의 마지막 업데이트 시간 조회
+        /// </summary>
+        public DateTime? GetLastUpdatedTime(string ipAddress, DateTime shiftDate, ShiftType shiftType)
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+
+                // LastUpdatedAt이 NULL이면 CreatedAt을 사용
+                string sql = @"
+                    SELECT COALESCE(LastUpdatedAt, CreatedAt) FROM ShiftStateLogs
+                    WHERE IpAddress = @IpAddress
+                      AND ShiftDate = @ShiftDate
+                      AND ShiftType = @ShiftType
+                    ORDER BY CreatedAt DESC
+                    LIMIT 1";
+
+                using (var cmd = new SQLiteCommand(sql, conn))
+                {
+                    cmd.Parameters.AddWithValue("@IpAddress", ipAddress);
+                    cmd.Parameters.AddWithValue("@ShiftDate", shiftDate.ToString("yyyy-MM-dd"));
+                    cmd.Parameters.AddWithValue("@ShiftType", shiftType.ToString());
+
+                    var result = cmd.ExecuteScalar();
+                    if (result != null && result != DBNull.Value)
+                    {
+                        return DateTime.Parse(result.ToString());
+                    }
+                }
+            }
+
+            return null;
         }
     }
 }

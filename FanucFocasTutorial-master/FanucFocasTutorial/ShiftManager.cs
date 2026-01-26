@@ -222,21 +222,23 @@ namespace FanucFocasTutorial
         public int LoadingSeconds { get; set; }
         public int AlarmSeconds { get; set; }
         public int IdleSeconds { get; set; }
+        public int UnmeasuredSeconds { get; set; }  // 미측정 시간 (앱 종료 기간)
 
         // 생산수량
         public int ProductionCount { get; set; }
 
         // 통합 지표
         public int ActualWorkingSeconds => RunningSeconds;  // 실가공시간
-        public int InputSeconds => RunningSeconds + LoadingSeconds;  // 투입시간
+        public int InputSeconds => LoadingSeconds;  // 투입시간 (제품교체 시간만)
         public int StopSeconds => IdleSeconds + AlarmSeconds;  // 정지시간
 
         public double OperationRate
         {
             get
             {
-                int total = InputSeconds + StopSeconds;
-                return total > 0 ? (double)InputSeconds / total * 100 : 0;
+                // 가동률 = 실가공시간 / 전체시간(미측정 포함) * 100
+                int total = RunningSeconds + LoadingSeconds + IdleSeconds + AlarmSeconds + UnmeasuredSeconds;
+                return total > 0 ? (double)RunningSeconds / total * 100 : 0;
             }
         }
     }

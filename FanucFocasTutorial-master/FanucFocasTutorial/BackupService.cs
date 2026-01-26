@@ -345,9 +345,36 @@ namespace FanucFocasTutorial
 
                     if (ret == Focas1.EW_OK)
                     {
-                        // 데이터 형식에 따라 적절히 처리 필요
-                        sb.AppendLine($"{coordName}\t[좌표계 데이터]");
-                        _backupLog.AppendLine($"  - {coordName} ✓ 읽기 성공 (에러 코드: {ret})");
+                        // data 배열에서 실제 좌표 값 읽기 (단위: 1/1000 mm 또는 1/10000 inch)
+                        // IODBZOFS.type 필드로 축 개수 확인 (type=2: 모든 축)
+                        // LATHE: data[0]=X, data[1]=Z
+                        // MILL: data[0]=X, data[1]=Y, data[2]=Z
+
+                        // 디버그: 실제 데이터 확인
+                        _backupLog.AppendLine($"  - {coordName} DEBUG: type={zofs.type}, data[0]={zofs.data[0]}, data[1]={zofs.data[1]}, data[2]={zofs.data[2]}");
+
+                        // data[2]가 0이 아니면 MILL (3축), 0이면 LATHE (2축)로 판단
+                        bool isLathe = (zofs.data[2] == 0);
+
+                        double xValue, yValue, zValue;
+
+                        if (isLathe)
+                        {
+                            // LATHE: data[0]=X, data[1]=Z, Y축 없음
+                            xValue = zofs.data[0] / 1000.0;
+                            yValue = 0;
+                            zValue = zofs.data[1] / 1000.0;
+                        }
+                        else
+                        {
+                            // MILL: data[0]=X, data[1]=Y, data[2]=Z
+                            xValue = zofs.data[0] / 1000.0;
+                            yValue = zofs.data[1] / 1000.0;
+                            zValue = zofs.data[2] / 1000.0;
+                        }
+
+                        sb.AppendLine($"{coordName}\t{xValue:F3}\t{yValue:F3}\t{zValue:F3}");
+                        _backupLog.AppendLine($"  - {coordName} ✓ 읽기 성공 (에러 코드: {ret}, 기계={( isLathe ? "LATHE" : "MILL")}, X={xValue:F3}, Y={yValue:F3}, Z={zValue:F3})");
                         successCount++;
                     }
                     else
@@ -927,13 +954,13 @@ namespace FanucFocasTutorial
 
             try
             {
-                // 안전하게 작은 단위로 나눠서 읽기 (10개씩)
+                // 안전하게 작은 단위로 나눠서 읽기 (5개씩, IODBPMC0.cdata 크기 제한)
                 int totalAddrs = endAddr - startAddr + 1;
                 _backupLog.AppendLine($"    - {areaName} 영역 읽기 시작 (주소 {startAddr}~{endAddr}, 총 {totalAddrs}개, type={pmcType})");
 
-                for (ushort addr = startAddr; addr <= endAddr; addr += 10)
+                for (ushort addr = startAddr; addr <= endAddr; addr += 5)
                 {
-                    ushort readEnd = (ushort)Math.Min(addr + 9, endAddr);
+                    ushort readEnd = (ushort)Math.Min(addr + 4, endAddr);
                     ushort readCount = (ushort)(readEnd - addr + 1);
 
                     Focas1.IODBPMC0 pmcData = new Focas1.IODBPMC0();
@@ -943,7 +970,7 @@ namespace FanucFocasTutorial
 
                     if (ret == Focas1.EW_OK)
                     {
-                        for (int i = 0; i < readCount; i++)
+                        for (int i = 0; i < readCount && i < 5; i++)  // cdata 배열 크기(5) 초과 방지
                         {
                             sb.AppendLine($"주소 {addr + i}: {pmcData.cdata[i]}");
                             successCount++;

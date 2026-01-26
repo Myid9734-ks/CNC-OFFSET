@@ -9,9 +9,11 @@ namespace FanucFocasTutorial
 {
     public partial class AutoMonitoringForm : Form
     {
-        private static readonly string _logFilePath = Path.Combine(
-            AppDomain.CurrentDomain.BaseDirectory,
-            "MachineState_Debug.txt");
+        private static string GetLogFilePath()
+        {
+            string fileName = $"MachineState_Debug_{DateTime.Now:yyyyMMdd}.txt";
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+        }
         private static readonly object _logLock = new object();
 
         private CNCConnection _connection;
@@ -64,6 +66,7 @@ namespace FanucFocasTutorial
         private Label _lblActualWorkingTime;  // 실가공시간
         private Label _lblInputTime;          // 투입시간
         private Label _lblStopTime;           // 정지시간
+        private Label _lblUnmeasuredTime;     // 미측정시간
         private Label _lblOperationRate;      // 가동률
         private Label _lblProductionCount;    // 생산수량
 
@@ -127,6 +130,10 @@ namespace FanucFocasTutorial
             InitializeComponent();
             InitializeShiftTime();
             SetupTimer();
+            
+            // 프로그램 시작 로그
+            WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] ========== 자동모니터링 시작 ==========");
+            WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 프로그램 초기화 완료 - IP: {_connection?.IpAddress}, 근무조: {ShiftManager.GetShiftDisplayName(_currentShift)}");
         }
 
         // 연결 변경 메서드 추가
@@ -211,18 +218,125 @@ namespace FanucFocasTutorial
         // IP별 근무조 데이터 초기화
         private void InitializeShiftDataForIp(string ip)
         {
-            _shiftStateData[ip] = new ShiftStateData
+            try
             {
-                IpAddress = ip,
-                ShiftType = _currentShift.Type,
-                ShiftDate = _currentShift.StartTime.Date,
-                IsExtended = _currentShift.IsExtended,
-                RunningSeconds = 0,
-                LoadingSeconds = 0,
-                AlarmSeconds = 0,
-                IdleSeconds = 0,
-                ProductionCount = 0
-            };
+                var logService = new LogDataService();
+                var savedData = logService.LoadShiftStateData(
+                    ip,
+                    _currentShift.StartTime.Date,
+                    _currentShift.Type);
+
+                if (savedData != null)
+                {
+                    // 마지막 업데이트 시간 조회
+                    var lastUpdatedTime = logService.GetLastUpdatedTime(
+                        ip,
+                        _currentShift.StartTime.Date,
+                        _currentShift.Type);
+
+                    // 미측정 시간 계산: 마지막 업데이트 ~ 현재 시간
+                    WriteStateLog($"[{ip}] ========== 미측정 시간 계산 시작 ==========");
+                    WriteStateLog($"[{ip}] 현재 근무조: {ShiftManager.GetShiftDisplayName(_currentShift)}");
+                    WriteStateLog($"[{ip}] 근무조 시간: {_currentShift.StartTime:yyyy-MM-dd HH:mm:ss} ~ {_currentShift.EndTime:yyyy-MM-dd HH:mm:ss}");
+                    
+                    if (lastUpdatedTime.HasValue)
+                    {
+                        DateTime now = DateTime.Now;
+                        WriteStateLog($"[{ip}] 마지막 업데이트 시간: {lastUpdatedTime.Value:yyyy-MM-dd HH:mm:ss}");
+                        WriteStateLog($"[{ip}] 현재 시간: {now:yyyy-MM-dd HH:mm:ss}");
+
+                        // 현재 시간이 같은 근무조 내에 있는지 확인
+                        if (now >= _currentShift.StartTime && now < _currentShift.EndTime)
+                        {
+                            TimeSpan unmeasuredGap = now - lastUpdatedTime.Value;
+                            WriteStateLog($"[{ip}] 시간 차이: {unmeasuredGap.TotalSeconds}초 ({FormatDuration((int)unmeasuredGap.TotalSeconds)})");
+
+                            // 음수 방지 (시간이 잘못된 경우)
+                            if (unmeasuredGap.TotalSeconds > 0)
+                            {
+                                int additionalUnmeasured = (int)unmeasuredGap.TotalSeconds;
+                                int beforeUnmeasured = savedData.UnmeasuredSeconds;
+                                savedData.UnmeasuredSeconds += additionalUnmeasured;
+                                
+                                WriteStateLog($"[{ip}] 미측정 시간 추가 - 이전: {FormatDuration(beforeUnmeasured)}, 추가: {FormatDuration(additionalUnmeasured)}, 합계: {FormatDuration(savedData.UnmeasuredSeconds)}");
+                                
+                                // 미측정 시간 계산 후 즉시 DB에 저장
+                                try
+                                {
+                                    logService.UpdateShiftStateData(savedData);
+                                    WriteStateLog($"[{ip}] ★ 미측정 시간 DB 저장 완료");
+                                }
+                                catch (Exception ex)
+                                {
+                                    WriteStateLog($"[{ip}] ★ 미측정 시간 DB 저장 실패: {ex.Message}");
+                                }
+                            }
+                            else
+                            {
+                                WriteStateLog($"[{ip}] 미측정 시간 계산 스킵 (시간 차이 <= 0)");
+                            }
+                        }
+                        else
+                        {
+                            WriteStateLog($"[{ip}] 미측정 시간 계산 스킵 (다른 근무조)");
+                        }
+                    }
+                    else
+                    {
+                        WriteStateLog($"[{ip}] 마지막 업데이트 시간 없음 - 미측정 시간 계산 불가");
+                    }
+                    WriteStateLog($"[{ip}] ========== 미측정 시간 계산 완료 ==========");
+
+                    // DB에서 복원
+                    _shiftStateData[ip] = savedData;
+                    WriteStateLog($"[{ip}] ========== DB 데이터 복원 완료 ==========");
+                    WriteStateLog($"[{ip}] 복원된 데이터 - Running:{FormatDuration(savedData.RunningSeconds)} " +
+                        $"Loading:{FormatDuration(savedData.LoadingSeconds)} " +
+                        $"Alarm:{FormatDuration(savedData.AlarmSeconds)} " +
+                        $"Idle:{FormatDuration(savedData.IdleSeconds)} " +
+                        $"Unmeasured:{FormatDuration(savedData.UnmeasuredSeconds)} " +
+                        $"생산:{savedData.ProductionCount}개");
+                    _dailyStateDurations[ip][MachineState.Running] = savedData.RunningSeconds;
+                    _dailyStateDurations[ip][MachineState.Loading] = savedData.LoadingSeconds;
+                    _dailyStateDurations[ip][MachineState.Alarm] = savedData.AlarmSeconds;
+                    _dailyStateDurations[ip][MachineState.Idle] = savedData.IdleSeconds;
+                }
+                else
+                {
+                    // DB에 데이터 없음 - 새로 시작
+                    WriteStateLog($"[{ip}] ========== 새 근무조 시작 (DB 데이터 없음) ==========");
+                    _shiftStateData[ip] = new ShiftStateData
+                    {
+                        IpAddress = ip,
+                        ShiftType = _currentShift.Type,
+                        ShiftDate = _currentShift.StartTime.Date,
+                        IsExtended = _currentShift.IsExtended,
+                        RunningSeconds = 0,
+                        LoadingSeconds = 0,
+                        AlarmSeconds = 0,
+                        IdleSeconds = 0,
+                        UnmeasuredSeconds = 0,
+                        ProductionCount = 0
+                    };
+                }
+            }
+            catch (Exception)
+            {
+                // DB 복원 실패 시 0으로 시작
+                _shiftStateData[ip] = new ShiftStateData
+                {
+                    IpAddress = ip,
+                    ShiftType = _currentShift.Type,
+                    ShiftDate = _currentShift.StartTime.Date,
+                    IsExtended = _currentShift.IsExtended,
+                    RunningSeconds = 0,
+                    LoadingSeconds = 0,
+                    AlarmSeconds = 0,
+                    IdleSeconds = 0,
+                    UnmeasuredSeconds = 0,
+                    ProductionCount = 0
+                };
+            }
         }
 
         private void InitializeComponent()
@@ -236,20 +350,20 @@ namespace FanucFocasTutorial
 
         private void InitializeControls()
         {
-            // 메인 레이아웃 패널 (4열 구조)
+            // 메인 레이아웃 패널 (5열 구조)
             _mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 4,
+                ColumnCount = 5,
                 RowCount = 7,  // 8행에서 7행으로 축소
                 Padding = new Padding(10),
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.Single
             };
 
-            // 컬럼 비율 설정 (4열)
-            for (int i = 0; i < 4; i++)
+            // 컬럼 비율 설정 (5열)
+            for (int i = 0; i < 5; i++)
             {
-                _mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
+                _mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
             }
 
             // 행 비율 설정
@@ -258,13 +372,13 @@ namespace FanucFocasTutorial
                 _mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 14.29F));
             }
 
-            // Row 0: 현재 시간 + 근무조 정보 (2열씩)
+            // Row 0: 현재 시간 + 근무조 정보 (3열 + 2열)
             _lblCurrentTime = CreateStyledLabel($"현재 시간: {DateTime.Now:HH:mm:ss}", Color.LightBlue);
             _mainLayout.Controls.Add(_lblCurrentTime, 0, 0);
-            _mainLayout.SetColumnSpan(_lblCurrentTime, 2);
+            _mainLayout.SetColumnSpan(_lblCurrentTime, 3);
 
             _lblShiftInfo = CreateStyledLabel(ShiftManager.GetShiftDisplayName(_currentShift), Color.LightGreen);
-            _mainLayout.Controls.Add(_lblShiftInfo, 2, 0);
+            _mainLayout.Controls.Add(_lblShiftInfo, 3, 0);
             _mainLayout.SetColumnSpan(_lblShiftInfo, 2);
 
             // 설비 상태 모니터링 LED 버튼
@@ -302,9 +416,9 @@ namespace FanucFocasTutorial
             _mainLayout.Controls.Add(_lblStateAlarmTime, 2, 2);
             _mainLayout.Controls.Add(_lblStateIdleTime, 3, 2);
 
-            // Row 3: PMC 디버그 정보 (4열 합치기)
+            // Row 3: PMC 디버그 정보 (5열 합치기)
             _mainLayout.Controls.Add(_lblPmcDebugInfo, 0, 3);
-            _mainLayout.SetColumnSpan(_lblPmcDebugInfo, 4);
+            _mainLayout.SetColumnSpan(_lblPmcDebugInfo, 5);
 
             // 운전 정보
             _lblProgram = CreateStyledLabel("프로그램: -", Color.LightYellow);
@@ -314,20 +428,21 @@ namespace FanucFocasTutorial
 
             // Row 4: 운전 정보
             _mainLayout.Controls.Add(_lblProgram, 0, 4);
-            _mainLayout.SetColumnSpan(_lblProgram, 2);
-            _mainLayout.Controls.Add(_lblSpindleInfo, 2, 4);
+            _mainLayout.SetColumnSpan(_lblProgram, 3);
+            _mainLayout.Controls.Add(_lblSpindleInfo, 3, 4);
             _mainLayout.SetColumnSpan(_lblSpindleInfo, 2);
 
             // Row 5: 이송속도, 알람
             _mainLayout.Controls.Add(_lblFeedrateInfo, 0, 5);
-            _mainLayout.SetColumnSpan(_lblFeedrateInfo, 2);
-            _mainLayout.Controls.Add(_lblAlarmInfo, 2, 5);
+            _mainLayout.SetColumnSpan(_lblFeedrateInfo, 3);
+            _mainLayout.Controls.Add(_lblAlarmInfo, 3, 5);
             _mainLayout.SetColumnSpan(_lblAlarmInfo, 2);
 
             // 통합 지표 레이블
             _lblActualWorkingTime = CreateStyledLabel("실가공: 00:00:00", Color.FromArgb(144, 238, 144));
             _lblInputTime = CreateStyledLabel("투입: 00:00:00", Color.FromArgb(173, 216, 230));
             _lblStopTime = CreateStyledLabel("정지: 00:00:00", Color.FromArgb(255, 182, 193));
+            _lblUnmeasuredTime = CreateStyledLabel("미측정: 00:00:00", Color.FromArgb(220, 220, 220));
             _lblOperationRate = CreateStyledLabel("가동률: 0%", Color.FromArgb(255, 255, 153));
             _lblProductionCount = CreateStyledLabel("생산: 0개", Color.LightCyan);
 
@@ -335,6 +450,7 @@ namespace FanucFocasTutorial
             _mainLayout.Controls.Add(_lblActualWorkingTime, 0, 6);
             _mainLayout.Controls.Add(_lblInputTime, 1, 6);
             _mainLayout.Controls.Add(_lblStopTime, 2, 6);
+            _mainLayout.Controls.Add(_lblUnmeasuredTime, 3, 6);
 
             // 가동률과 생산수량을 하나의 셀에 표시하기 위해 패널 생성
             TableLayoutPanel metricsPanel = new TableLayoutPanel
@@ -348,7 +464,7 @@ namespace FanucFocasTutorial
             metricsPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
             metricsPanel.Controls.Add(_lblOperationRate, 0, 0);
             metricsPanel.Controls.Add(_lblProductionCount, 0, 1);
-            _mainLayout.Controls.Add(metricsPanel, 3, 6);
+            _mainLayout.Controls.Add(metricsPanel, 4, 6);
 
             this.Controls.Add(_mainLayout);
         }
@@ -401,13 +517,21 @@ namespace FanucFocasTutorial
             };
             _updateTimer.Tick += UpdateTimer_Tick;
             _updateTimer.Start();
+            WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 타이머 시작 - 1초 간격 업데이트");
         }
 
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
-            UpdateDisplayData();
-            UpdateStatusTime();
-            UpdateMachineStateMonitoring();  // 설비 상태 모니터링 업데이트
+            try
+            {
+                UpdateDisplayData();
+                UpdateStatusTime();
+                UpdateMachineStateMonitoring();  // 설비 상태 모니터링 업데이트
+            }
+            catch (Exception ex)
+            {
+                WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 타이머 틱 오류: {ex.Message}");
+            }
         }
 
         private void UpdateDisplayData()
@@ -518,14 +642,23 @@ namespace FanucFocasTutorial
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] ========== 프로그램 종료 시작 ==========");
+            
             // 현재 근무조 데이터 저장
             if (_connection != null && _connection.IsConnected)
             {
+                WriteStateLog($"[{_connection.IpAddress}] 종료 시 데이터 저장 시작");
                 SaveCurrentShiftData(_connection.IpAddress);
+            }
+            else
+            {
+                WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 연결 안됨 - 데이터 저장 스킵");
             }
 
             _updateTimer?.Stop();
             _updateTimer?.Dispose();
+            WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 타이머 정지 및 해제 완료");
+            WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] ========== 프로그램 종료 완료 ==========");
             base.OnFormClosing(e);
         }
 
@@ -564,10 +697,16 @@ namespace FanucFocasTutorial
         private async void UpdateMachineStateMonitoring()
         {
             if (_connection == null || !_connection.IsConnected)
+            {
+                WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 연결 안됨 - 상태 모니터링 스킵");
                 return;
+            }
 
             if (_isStateMonitoringUpdating)
+            {
+                WriteStateLog($"[{_connection.IpAddress}] 이미 업데이트 중 - 스킵");
                 return;
+            }
 
             _isStateMonitoringUpdating = true;
 
@@ -578,6 +717,7 @@ namespace FanucFocasTutorial
                 // IP별 상태가 초기화되지 않았으면 초기화
                 if (!_stateTransitions.ContainsKey(ip))
                 {
+                    WriteStateLog($"[{ip}] 상태 추적 초기화");
                     InitializeStateForIp(ip);
                 }
 
@@ -588,15 +728,20 @@ namespace FanucFocasTutorial
                 {
                     if (ReadPmcStateValues(out PmcStateValues pmc))
                         return (success: true, values: pmc);
+                    WriteStateLog($"[{ip}] PMC 읽기 실패");
                     return (success: false, values: default(PmcStateValues));
                 });
 
                 if (!pmcResult.success)
+                {
+                    WriteStateLog($"[{ip}] PMC 읽기 실패로 상태 모니터링 중단");
                     return;
+                }
 
                 _currentPmcValues = pmcResult.values;
-
                 MachineState currentState = DetermineMachineState(pmcResult.values);
+                
+                WriteStateLog($"[{ip}] PMC 읽기 성공 - F0.7={B(pmcResult.values.F0_7)} F1.0={B(pmcResult.values.F1_0)} F3.5={B(pmcResult.values.F3_5)} F10={pmcResult.values.F10_value} G4.3={B(pmcResult.values.G4_3)} G5.0={B(pmcResult.values.G5_0)} → 상태: {currentState}");
 
                 var transition = _stateTransitions[ip];
                 var dailyDurations = _dailyStateDurations[ip];
@@ -607,9 +752,14 @@ namespace FanucFocasTutorial
                     dailyDurations[transition.CurrentState] += duration;
 
                     // 상태 변경 로그 작성
-                    WriteStateLog($"[{ip}] 상태변경: {transition.CurrentState} → {currentState} " +
-                        $"(지속시간: {duration}초) | PMC: F0.7={B(pmcResult.values.F0_7)} F1.0={B(pmcResult.values.F1_0)} " +
+                    WriteStateLog($"[{ip}] ★★★ 상태변경 ★★★ {transition.CurrentState} → {currentState} " +
+                        $"(지속시간: {FormatDuration(duration)}) | PMC: F0.7={B(pmcResult.values.F0_7)} F1.0={B(pmcResult.values.F1_0)} " +
                         $"F3.5={B(pmcResult.values.F3_5)} F10={pmcResult.values.F10_value} G4.3={B(pmcResult.values.G4_3)} G5.0={B(pmcResult.values.G5_0)}");
+                    
+                    WriteStateLog($"[{ip}] 이전 상태 누적 시간 - Running:{FormatDuration(dailyDurations[MachineState.Running])} " +
+                        $"Loading:{FormatDuration(dailyDurations[MachineState.Loading])} " +
+                        $"Alarm:{FormatDuration(dailyDurations[MachineState.Alarm])} " +
+                        $"Idle:{FormatDuration(dailyDurations[MachineState.Idle])}");
 
                     // 투입 → 실가공 전환 시 생산 수량 증가
                     if (transition.CurrentState == MachineState.Loading && currentState == MachineState.Running)
@@ -618,7 +768,7 @@ namespace FanucFocasTutorial
                         WriteStateLog($"[{ip}] 생산수량 증가: {_connection.GetProductionCount()}개");
                     }
 
-                    // 근무조 데이터 업데이트
+                    // 근무조 데이터 업데이트 (메모리)
                     if (_shiftStateData.ContainsKey(ip))
                     {
                         var shiftData = _shiftStateData[ip];
@@ -626,11 +776,32 @@ namespace FanucFocasTutorial
                         shiftData.LoadingSeconds = dailyDurations[MachineState.Loading];
                         shiftData.AlarmSeconds = dailyDurations[MachineState.Alarm];
                         shiftData.IdleSeconds = dailyDurations[MachineState.Idle];
+                        shiftData.ProductionCount = _connection.GetProductionCount();
+                        
+                        WriteStateLog($"[{ip}] 메모리 데이터 업데이트 - Running:{FormatDuration(shiftData.RunningSeconds)} " +
+                            $"Loading:{FormatDuration(shiftData.LoadingSeconds)} " +
+                            $"Alarm:{FormatDuration(shiftData.AlarmSeconds)} " +
+                            $"Idle:{FormatDuration(shiftData.IdleSeconds)} " +
+                            $"생산:{shiftData.ProductionCount}개");
+                        
+                        // 상태 변경 시 즉시 DB 업데이트
+                        try
+                        {
+                            var logService = new LogDataService();
+                            logService.UpdateShiftStateData(shiftData);
+                            WriteStateLog($"[{ip}] ★ DB 업데이트 완료 (상태 변경 시)");
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteStateLog($"[{ip}] ★ DB 업데이트 실패: {ex.Message}");
+                        }
                     }
 
                     transition.StartTime = DateTime.Now;
                     transition.CurrentState = currentState;
                     transition.ElapsedSeconds = 0;
+                    
+                    WriteStateLog($"[{ip}] 새 상태 시작: {currentState} (시작시간: {transition.StartTime:HH:mm:ss})");
                 }
                 else
                 {
@@ -639,6 +810,11 @@ namespace FanucFocasTutorial
 
                 UpdateStateMonitoringUI(currentState, transition, dailyDurations);
                 UpdatePmcDebugUI(pmcResult.values);
+            }
+            catch (Exception ex)
+            {
+                WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 상태 모니터링 오류: {ex.Message}");
+                WriteStateLog($"[{_connection?.IpAddress ?? "N/A"}] 스택 트레이스: {ex.StackTrace}");
             }
             finally
             {
@@ -656,11 +832,17 @@ namespace FanucFocasTutorial
             // 근무조 변경 감지
             if (ShiftManager.IsShiftChanged(_currentShift, newShift))
             {
+                WriteStateLog($"[{ip}] ========== 근무조 전환 감지 ==========");
+                WriteStateLog($"[{ip}] 이전 근무조: {ShiftManager.GetShiftDisplayName(_currentShift)}");
+                WriteStateLog($"[{ip}] 새 근무조: {ShiftManager.GetShiftDisplayName(newShift)}");
+                
                 // 현재 근무조 데이터 저장
+                WriteStateLog($"[{ip}] 이전 근무조 데이터 저장 시작");
                 SaveCurrentShiftData(ip);
 
                 // 새 근무조로 전환
                 _currentShift = newShift;
+                WriteStateLog($"[{ip}] 새 근무조로 전환 완료");
 
                 // 상태 추적 초기화
                 _dailyStateDurations[ip] = new Dictionary<MachineState, int>
@@ -682,6 +864,7 @@ namespace FanucFocasTutorial
                     LoadingSeconds = 0,
                     AlarmSeconds = 0,
                     IdleSeconds = 0,
+                    UnmeasuredSeconds = 0,
                     ProductionCount = 0
                 };
 
@@ -707,21 +890,53 @@ namespace FanucFocasTutorial
             try
             {
                 var shiftData = _shiftStateData[ip];
-
-                // 현재 상태의 누적 시간 반영
                 var dailyDurations = _dailyStateDurations[ip];
+
+                // 현재 진행 중인 상태의 시간을 누적에 반영
+                if (_stateTransitions.ContainsKey(ip))
+                {
+                    var transition = _stateTransitions[ip];
+                    int elapsedSeconds = (int)(DateTime.Now - transition.StartTime).TotalSeconds;
+
+                    // 현재 상태에 진행 중인 시간 추가
+                    dailyDurations[transition.CurrentState] += elapsedSeconds;
+
+                    WriteStateLog($"[{ip}] 앱 종료 시 데이터 저장: {transition.CurrentState} 상태 {elapsedSeconds}초 추가 반영");
+                }
+
+                // 누적 시간을 shiftData에 반영
                 shiftData.RunningSeconds = dailyDurations[MachineState.Running];
                 shiftData.LoadingSeconds = dailyDurations[MachineState.Loading];
                 shiftData.AlarmSeconds = dailyDurations[MachineState.Alarm];
                 shiftData.IdleSeconds = dailyDurations[MachineState.Idle];
 
+                WriteStateLog($"[{ip}] ========== DB 저장 시작 ==========");
+                WriteStateLog($"[{ip}] 저장되는 데이터:");
+                WriteStateLog($"[{ip}]   - Running: {FormatDuration(shiftData.RunningSeconds)} ({shiftData.RunningSeconds}초)");
+                WriteStateLog($"[{ip}]   - Loading: {FormatDuration(shiftData.LoadingSeconds)} ({shiftData.LoadingSeconds}초)");
+                WriteStateLog($"[{ip}]   - Alarm: {FormatDuration(shiftData.AlarmSeconds)} ({shiftData.AlarmSeconds}초)");
+                WriteStateLog($"[{ip}]   - Idle: {FormatDuration(shiftData.IdleSeconds)} ({shiftData.IdleSeconds}초)");
+                WriteStateLog($"[{ip}]   - Unmeasured: {FormatDuration(shiftData.UnmeasuredSeconds)} ({shiftData.UnmeasuredSeconds}초)");
+                WriteStateLog($"[{ip}]   - 생산수량: {shiftData.ProductionCount}개");
+                WriteStateLog($"[{ip}]   - 근무조: {shiftData.ShiftType}, 날짜: {shiftData.ShiftDate:yyyy-MM-dd}");
+
                 // DB 저장
                 var logService = new LogDataService();
-                logService.SaveShiftStateData(shiftData);
+                try
+                {
+                    logService.SaveShiftStateData(shiftData);
+                    WriteStateLog($"[{ip}] ★ DB 저장 성공 - 마지막 업데이트 시간: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                }
+                catch (Exception ex)
+                {
+                    WriteStateLog($"[{ip}] ★ DB 저장 실패: {ex.Message}");
+                    WriteStateLog($"[{ip}] 스택 트레이스: {ex.StackTrace}");
+                }
+                WriteStateLog($"[{ip}] ========== DB 저장 완료 ==========");
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // 저장 실패 시 무시 (다음 전환 시 재시도)
+                WriteStateLog($"[{ip}] 저장 실패: {ex.Message}");
             }
         }
 
@@ -934,20 +1149,28 @@ namespace FanucFocasTutorial
             // 실가공시간 = Running
             int actualWorking = runningTotal;
 
-            // 투입시간 = Running + Loading
-            int input = runningTotal + loadingTotal;
+            // 투입시간 = Loading (제품교체 시간만)
+            int input = loadingTotal;
 
             // 정지시간 = Idle + Alarm
             int stop = idleTotal + alarmTotal;
 
-            // 가동률 = 실가공시간 / 전체시간 * 100
-            int total = runningTotal + loadingTotal + idleTotal + alarmTotal;
+            // 미측정시간
+            int unmeasured = 0;
+            if (_connection != null && _shiftStateData.ContainsKey(_connection.IpAddress))
+            {
+                unmeasured = _shiftStateData[_connection.IpAddress].UnmeasuredSeconds;
+            }
+
+            // 가동률 = 실가공시간 / 전체시간(미측정 포함) * 100
+            int total = runningTotal + loadingTotal + idleTotal + alarmTotal + unmeasured;
             double operationRate = total > 0 ? (double)actualWorking / total * 100 : 0;
 
             // UI 업데이트
             _lblActualWorkingTime.Text = $"실가공: {FormatDuration(actualWorking)}";
             _lblInputTime.Text = $"투입: {FormatDuration(input)}";
             _lblStopTime.Text = $"정지: {FormatDuration(stop)}";
+            _lblUnmeasuredTime.Text = $"미측정: {FormatDuration(unmeasured)}";
             _lblOperationRate.Text = $"가동률: {operationRate:F1}%";
 
             // 생산수량 (근무조 데이터에서 가져오기)
@@ -995,8 +1218,20 @@ namespace FanucFocasTutorial
             {
                 lock (_logLock)
                 {
+                    string logFilePath = GetLogFilePath();
                     string logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}";
-                    File.AppendAllText(_logFilePath, logMessage + Environment.NewLine);
+                    
+                    // 파일이 없으면 헤더 작성
+                    if (!File.Exists(logFilePath))
+                    {
+                        string header = $"========================================\n";
+                        header += $"자동모니터링 로그 파일\n";
+                        header += $"생성일시: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n";
+                        header += $"========================================\n\n";
+                        File.WriteAllText(logFilePath, header);
+                    }
+                    
+                    File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
                 }
             }
             catch
