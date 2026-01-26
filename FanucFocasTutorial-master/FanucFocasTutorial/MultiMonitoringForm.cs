@@ -838,6 +838,132 @@ namespace FanucFocasTutorial
         }
 
         /// <summary>
+        /// 2일 이상 된 로그 파일 삭제
+        /// </summary>
+        private void CleanupOldLogFiles()
+        {
+            try
+            {
+                string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                DateTime cutoffDate = DateTime.Now.AddDays(-2);
+                int deletedCount = 0;
+
+                // 삭제할 로그 파일 패턴들
+                var logPatterns = new[]
+                {
+                    "R854_Debug.txt",
+                    "MachineState_Debug_*.txt",
+                    "SyncDebugLog.txt",
+                    "pmc_control_log.txt",
+                    "NCBackup_Debug.txt",
+                    "ShiftSearch_Debug.txt",
+                    "MainForm_NCBackup_Error.txt"
+                };
+
+                // 단일 파일들 삭제 (수정일 기준)
+                var singleFiles = new[]
+                {
+                    Path.Combine(baseDirectory, "R854_Debug.txt"),
+                    Path.Combine(baseDirectory, "SyncDebugLog.txt"),
+                    Path.Combine(baseDirectory, "pmc_control_log.txt"),
+                    Path.Combine(baseDirectory, "NCBackup_Debug.txt"),
+                    Path.Combine(baseDirectory, "ShiftSearch_Debug.txt"),
+                    Path.Combine(baseDirectory, "MainForm_NCBackup_Error.txt")
+                };
+
+                foreach (var filePath in singleFiles)
+                {
+                    if (File.Exists(filePath))
+                    {
+                        try
+                        {
+                            FileInfo fileInfo = new FileInfo(filePath);
+                            if (fileInfo.LastWriteTime < cutoffDate)
+                            {
+                                File.Delete(filePath);
+                                deletedCount++;
+                                WriteStateLog($"[{_connection.IpAddress}] 오래된 로그 파일 삭제: {Path.GetFileName(filePath)} (수정일: {fileInfo.LastWriteTime:yyyy-MM-dd})");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteStateLog($"[{_connection.IpAddress}] 로그 파일 삭제 실패 ({Path.GetFileName(filePath)}): {ex.Message}");
+                        }
+                    }
+                }
+
+                // 날짜별 파일들 삭제 (파일명의 날짜 기준)
+                try
+                {
+                    var files = Directory.GetFiles(baseDirectory, "MachineState_Debug_*.txt");
+                    foreach (var filePath in files)
+                    {
+                        try
+                        {
+                            string fileName = Path.GetFileName(filePath);
+                            // 파일명에서 날짜 추출: MachineState_Debug_yyyyMMdd.txt
+                            if (fileName.Length >= 25 && fileName.StartsWith("MachineState_Debug_"))
+                            {
+                                string dateStr = fileName.Substring(20, 8); // yyyyMMdd 부분
+                                if (DateTime.TryParseExact(dateStr, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out DateTime fileDate))
+                                {
+                                    if (fileDate < cutoffDate.Date)
+                                    {
+                                        File.Delete(filePath);
+                                        deletedCount++;
+                                        WriteStateLog($"[{_connection.IpAddress}] 오래된 로그 파일 삭제: {fileName} (날짜: {fileDate:yyyy-MM-dd})");
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteStateLog($"[{_connection.IpAddress}] 로그 파일 삭제 실패 ({Path.GetFileName(filePath)}): {ex.Message}");
+                        }
+                    }
+                }
+                catch { }
+
+                // Logs 폴더의 AutoOffset 로그 파일들 삭제
+                try
+                {
+                    string logsDirectory = Path.Combine(baseDirectory, "Logs");
+                    if (Directory.Exists(logsDirectory))
+                    {
+                        var logFiles = Directory.GetFiles(logsDirectory, "AutoOffset_Log_*.csv");
+                        foreach (var filePath in logFiles)
+                        {
+                            try
+                            {
+                                FileInfo fileInfo = new FileInfo(filePath);
+                                if (fileInfo.LastWriteTime < cutoffDate)
+                                {
+                                    File.Delete(filePath);
+                                    deletedCount++;
+                                    WriteStateLog($"[{_connection.IpAddress}] 오래된 로그 파일 삭제: {Path.GetFileName(filePath)} (수정일: {fileInfo.LastWriteTime:yyyy-MM-dd})");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                WriteStateLog($"[{_connection.IpAddress}] 로그 파일 삭제 실패 ({Path.GetFileName(filePath)}): {ex.Message}");
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                if (deletedCount > 0)
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] 로그 파일 정리 완료: {deletedCount}개 파일 삭제");
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteStateLog($"[{_connection.IpAddress}] 로그 파일 정리 중 오류: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// 근무조 전환 감지 및 처리
         /// </summary>
         private void CheckAndHandleShiftTransition()
@@ -880,6 +1006,16 @@ namespace FanucFocasTutorial
                 catch (Exception ex)
                 {
                     WriteStateLog($"[{_connection.IpAddress}] 사이클 로그 삭제 실패: {ex.Message}");
+                }
+
+                // 2일 이상 된 로그 파일 삭제
+                try
+                {
+                    CleanupOldLogFiles();
+                }
+                catch (Exception ex)
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] 로그 파일 정리 실패: {ex.Message}");
                 }
 
                 // 상태 추적 초기화
