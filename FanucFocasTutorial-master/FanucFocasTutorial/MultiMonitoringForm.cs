@@ -187,6 +187,10 @@ namespace FanucFocasTutorial
         // M1 옵셔널 스톱 타이머
         private DateTime? _m1StartTime = null;
 
+        // DB 업데이트 타이머 (미측정 시간 계산을 위해)
+        private DateTime _lastDbUpdateTime = DateTime.MinValue;
+        private const int DB_UPDATE_INTERVAL_SECONDS = 60; // 1분마다 업데이트
+
         // 이전 값 캐싱 (깜빡임 방지)
         private string _prevActualWorking = "";
         private string _prevInput = "";
@@ -521,7 +525,7 @@ namespace FanucFocasTutorial
 
                     bool isAlarmState = hasAlarmPmcA;
 
-                    MachineState currentState = DetermineMachineState(pmc, hasAlarmPmcA);
+                    MachineState currentState = DetermineMachineState(pmc, hasAlarmPmcA, _stateTransition.CurrentState);
 
                     // 상태 전환 처리
                     if (_stateTransition.CurrentState != currentState)
@@ -530,9 +534,15 @@ namespace FanucFocasTutorial
                         _stateDurations[_stateTransition.CurrentState] += duration;
 
                         // 상태 변경 로그 작성
-                        WriteStateLog($"[{_connection.IpAddress}] 상태변경: {_stateTransition.CurrentState} → {currentState} " +
+                        WriteStateLog($"[{_connection.IpAddress}] ★★★ 상태변경: {_stateTransition.CurrentState} → {currentState} " +
                             $"(지속시간: {duration}초) | PMC: F0.7={B(pmc.F0_7)} F1.0={B(pmc.F1_0)} " +
-                            $"F3.5={B(pmc.F3_5)} F10={pmc.F10_value} G4.3={B(pmc.G4_3)} G5.0={B(pmc.G5_0)} AlarmPMC={hasAlarmPmcA}");
+                            $"F3.5={B(pmc.F3_5)} F10={pmc.F10_value} G4.3={B(pmc.G4_3)} G5.0={B(pmc.G5_0)} G5.2={B(pmc.G5_2)} AlarmPMC={hasAlarmPmcA}");
+                        
+                        // Running → Loading 전환 시 특별 로그
+                        if (_stateTransition.CurrentState == MachineState.Running && currentState == MachineState.Loading)
+                        {
+                            WriteStateLog($"[{_connection.IpAddress}] ★★★ 가공중 → 로딩중 전환 감지! F10={pmc.F10_value}, G5.0={B(pmc.G5_0)}, G5.2={B(pmc.G5_2)} ★★★");
+                        }
 
                         // 사이클 로그 저장 (10초 단위, Loading/Running만)
                         if (_stateTransition.CurrentState == MachineState.Loading || 
@@ -598,6 +608,23 @@ namespace FanucFocasTutorial
                     _shiftStateData.IdleSeconds = _stateDurations[MachineState.Idle] +
                         (currentState == MachineState.Idle ? _stateTransition.ElapsedSeconds : 0);
                     _shiftStateData.ProductionCount = _connection.GetProductionCount();
+
+                    // 정기적으로 DB 업데이트 (LastUpdatedAt 갱신을 위해)
+                    DateTime now = DateTime.Now;
+                    if ((now - _lastDbUpdateTime).TotalSeconds >= DB_UPDATE_INTERVAL_SECONDS)
+                    {
+                        try
+                        {
+                            var logService = new LogDataService();
+                            logService.UpdateShiftStateData(_shiftStateData);
+                            _lastDbUpdateTime = now;
+                            WriteStateLog($"[{_connection.IpAddress}] 정기 DB 업데이트 완료 (LastUpdatedAt 갱신)");
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteStateLog($"[{_connection.IpAddress}] 정기 DB 업데이트 실패: {ex.Message}");
+                        }
+                    }
 
                     // 근무조 전환 감지
                     CheckAndHandleShiftTransition();
@@ -750,7 +777,7 @@ namespace FanucFocasTutorial
                     if (!ReadPmcBit(type_g4_3, (short)addr_g4_3, (short)bit_g4_3, out values.G4_3)) return false;
                 }
 
-                // G5.0 (투입 조건)
+                // G5.0 (MFIN)
                 if (ParsePmcAddress(_config.PmcG5_0, out short type_g5_0, out ushort addr_g5_0, out int bit_g5_0))
                 {
                     WriteStateLog($"[{_connection.IpAddress}] ★ G5.0 파싱: 문자열='{_config.PmcG5_0}', Type={type_g5_0}, Addr={addr_g5_0}, Bit={bit_g5_0}");
@@ -764,6 +791,12 @@ namespace FanucFocasTutorial
                 else
                 {
                     WriteStateLog($"[{_connection.IpAddress}] ★ G5.0 파싱 실패: '{_config.PmcG5_0}'");
+                }
+
+                // G5.2 (SFIN)
+                if (ParsePmcAddress("G5.2", out short type_g5_2, out ushort addr_g5_2, out int bit_g5_2))
+                {
+                    ReadPmcBit(type_g5_2, (short)addr_g5_2, (short)bit_g5_2, out values.G5_2); // 실패해도 계속 진행
                 }
 
                 // X8.4 (비상정지)
@@ -1176,6 +1209,9 @@ namespace FanucFocasTutorial
                         $"유휴={FormatDuration(savedData.IdleSeconds)}, " +
                         $"미측정={FormatDuration(savedData.UnmeasuredSeconds)}, " +
                         $"생산={savedData.ProductionCount}개");
+                    
+                    // DB 업데이트 타이머 초기화
+                    _lastDbUpdateTime = DateTime.Now;
                 }
                 else
                 {
@@ -1195,6 +1231,9 @@ namespace FanucFocasTutorial
                     };
 
                     WriteStateLog($"[{_connection.IpAddress}] 새 근무조 시작");
+                    
+                    // DB 업데이트 타이머 초기화
+                    _lastDbUpdateTime = DateTime.Now;
                 }
             }
             catch (Exception ex)
@@ -1241,7 +1280,7 @@ namespace FanucFocasTutorial
             }
         }
 
-        private MachineState DetermineMachineState(PmcStateValues pmc, bool hasAlarmCnc)
+        private MachineState DetermineMachineState(PmcStateValues pmc, bool hasAlarmCnc, MachineState? currentState = null)
         {
             // 알람 체크: F1.0 (PMC 신호) OR CNC 알람
             if (pmc.F1_0 || hasAlarmCnc)
@@ -1264,12 +1303,12 @@ namespace FanucFocasTutorial
             }
 
             // 투입중: M코드가 설정된 경우만 체크 (0이 아닌 경우)
-            // 스타트 실행 중 AND 메모리 모드 AND M코드 실행 AND (M핀 처리 중 OR G5.0)
+            // 로직: F10=설정값이고 (G5.0=True OR G5.2=True)면 로딩 시작, 이후 (G5.0=True OR G5.2=True)면 로딩 유지
             bool loadingCondition1 = _config.LoadingMCode > 0;
             bool loadingCondition2 = pmc.F0_7;
             bool loadingCondition3 = pmc.F3_5;
             bool loadingCondition4 = pmc.F10_value == _config.LoadingMCode;
-            bool loadingCondition5 = pmc.G4_3 || pmc.G5_0;
+            bool loadingCondition5 = pmc.G4_3 || pmc.G5_0 || pmc.G5_2;  // G5.2 추가
 
             // 로딩 조건 디버깅
             if (_config.LoadingMCode > 0)  // M코드가 설정되어 있을 때만 로그
@@ -1277,11 +1316,27 @@ namespace FanucFocasTutorial
                 WriteStateLog($"[{_connection.IpAddress}] 로딩체크: MCode설정={loadingCondition1}({_config.LoadingMCode}), " +
                     $"F0.7={loadingCondition2}, F3.5={loadingCondition3}, " +
                     $"F10={pmc.F10_value}(설정={_config.LoadingMCode},일치={loadingCondition4}), " +
-                    $"G4.3/G5.0={loadingCondition5}(G4.3={pmc.G4_3},G5.0={pmc.G5_0})");
+                    $"G4.3/G5.0/G5.2={loadingCondition5}(G4.3={pmc.G4_3},G5.0={pmc.G5_0},G5.2={pmc.G5_2}), 현재상태={currentState}");
             }
 
+            // 로딩 유지 조건: 현재 상태가 Loading이고 F10=140이고 (G5.0=True OR G5.2=True)면 로딩 유지
+            // F10=140이 필수 기준이고, G5.0/G5.2는 부가 조건
+            // F10≠140이면 G5.0/G5.2 값은 무시
+            if (currentState == MachineState.Loading && loadingCondition4 && (pmc.G5_0 || pmc.G5_2))
+            {
+                if (loadingCondition1 && loadingCondition2 && loadingCondition3)
+                {
+                    WriteStateLog($"[{_connection.IpAddress}] 로딩 유지: F10=140이고 G5.0 또는 G5.2가 True이므로 로딩 상태 유지 (F10={pmc.F10_value}, G5.0={pmc.G5_0}, G5.2={pmc.G5_2})");
+                    return MachineState.Loading;
+                }
+            }
+            // 로딩 시작 조건: F10=설정값(140)이고 (G5.0=True OR G5.2=True)
+            // F10=140이 필수 기준
             if (loadingCondition1 && loadingCondition2 && loadingCondition3 && loadingCondition4 && loadingCondition5)
+            {
+                WriteStateLog($"[{_connection.IpAddress}] 로딩 시작: F10={pmc.F10_value}(설정={_config.LoadingMCode}), G5.0={pmc.G5_0}, G5.2={pmc.G5_2}, 현재상태={currentState} → Loading");
                 return MachineState.Loading;
+            }
 
             // 가공중: 자동 운전 신호 AND 메모리 모드
             if (pmc.F0_7 && pmc.F3_5)
@@ -1319,7 +1374,8 @@ namespace FanucFocasTutorial
         public bool F3_5;   // 메모리 모드
         public short F10_value;  // F10 주소 값 (M코드 번호)
         public bool G4_3;   // M핀 처리 중
-        public bool G5_0;   // 추가 투입 조건
+        public bool G5_0;   // MFIN (M코드 완료신호)
+        public bool G5_2;   // SFIN (스핀들 완료신호)
         public bool X8_4;   // 비상정지 신호
     }
 

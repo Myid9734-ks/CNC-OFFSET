@@ -497,7 +497,7 @@ namespace FanucFocasTutorial
                     // 전체 좌표계 테이블 자동 업데이트
                     BtnReadAll_Click(sender, e);
 
-                    MessageBox.Show("좌표계 업데이트 완료", "완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // 메시지박스 제거 (성공 시 출력하지 않음)
                 }
                 else
                 {

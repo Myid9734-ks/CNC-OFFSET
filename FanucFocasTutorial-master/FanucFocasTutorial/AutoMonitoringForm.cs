@@ -52,6 +52,10 @@ namespace FanucFocasTutorial
         // M1 옵셔널 스톱 타이머
         private DateTime? _m1StartTime = null;
 
+        // DB 업데이트 타이머 (미측정 시간 계산을 위해)
+        private Dictionary<string, DateTime> _lastDbUpdateTime = new Dictionary<string, DateTime>();
+        private const int DB_UPDATE_INTERVAL_SECONDS = 60; // 1분마다 업데이트
+
         // 시간 정보
         private Label _lblCurrentTime;
         private Label _lblShiftInfo;
@@ -324,6 +328,9 @@ namespace FanucFocasTutorial
                     _dailyStateDurations[ip][MachineState.Loading] = savedData.LoadingSeconds;
                     _dailyStateDurations[ip][MachineState.Alarm] = savedData.AlarmSeconds;
                     _dailyStateDurations[ip][MachineState.Idle] = savedData.IdleSeconds;
+                    
+                    // DB 업데이트 타이머 초기화
+                    _lastDbUpdateTime[ip] = DateTime.Now;
                 }
                 else
                 {
@@ -342,6 +349,9 @@ namespace FanucFocasTutorial
                         UnmeasuredSeconds = 0,
                         ProductionCount = 0
                     };
+                    
+                    // DB 업데이트 타이머 초기화
+                    _lastDbUpdateTime[ip] = DateTime.Now;
                 }
             }
             catch (Exception)
@@ -766,11 +776,15 @@ namespace FanucFocasTutorial
                 }
 
                 _currentPmcValues = pmcResult.values;
-                MachineState currentState = DetermineMachineState(pmcResult.values);
+                var transition = _stateTransitions.ContainsKey(ip) ? _stateTransitions[ip] : null;
+                MachineState currentState = DetermineMachineState(pmcResult.values, transition?.CurrentState);
                 
-                WriteStateLog($"[{ip}] PMC 읽기 성공 - F0.7={B(pmcResult.values.F0_7)} F1.0={B(pmcResult.values.F1_0)} F3.5={B(pmcResult.values.F3_5)} F10={pmcResult.values.F10_value} G4.3={B(pmcResult.values.G4_3)} G5.0={B(pmcResult.values.G5_0)} → 상태: {currentState}");
+                WriteStateLog($"[{ip}] PMC 읽기 성공 - F0.7={B(pmcResult.values.F0_7)} F1.0={B(pmcResult.values.F1_0)} F3.5={B(pmcResult.values.F3_5)} F10={pmcResult.values.F10_value} G4.3={B(pmcResult.values.G4_3)} G5.0={B(pmcResult.values.G5_0)} G5.2={B(pmcResult.values.G5_2)} → 상태: {currentState}");
 
-                var transition = _stateTransitions[ip];
+                if (transition == null)
+                {
+                    transition = _stateTransitions[ip];
+                }
                 var dailyDurations = _dailyStateDurations[ip];
 
                 if (transition.CurrentState != currentState)
@@ -833,6 +847,43 @@ namespace FanucFocasTutorial
                 else
                 {
                     transition.ElapsedSeconds = (int)(DateTime.Now - transition.StartTime).TotalSeconds;
+                    
+                    // 정기적으로 DB 업데이트 (LastUpdatedAt 갱신을 위해)
+                    DateTime now = DateTime.Now;
+                    if (!_lastDbUpdateTime.ContainsKey(ip))
+                    {
+                        _lastDbUpdateTime[ip] = DateTime.MinValue;
+                    }
+                    
+                    if ((now - _lastDbUpdateTime[ip]).TotalSeconds >= DB_UPDATE_INTERVAL_SECONDS)
+                    {
+                        try
+                        {
+                            if (_shiftStateData.ContainsKey(ip))
+                            {
+                                var shiftData = _shiftStateData[ip];
+                                // 현재 진행 중인 시간 반영
+                                shiftData.RunningSeconds = dailyDurations[MachineState.Running] + 
+                                    (currentState == MachineState.Running ? transition.ElapsedSeconds : 0);
+                                shiftData.LoadingSeconds = dailyDurations[MachineState.Loading] + 
+                                    (currentState == MachineState.Loading ? transition.ElapsedSeconds : 0);
+                                shiftData.AlarmSeconds = dailyDurations[MachineState.Alarm] + 
+                                    (currentState == MachineState.Alarm ? transition.ElapsedSeconds : 0);
+                                shiftData.IdleSeconds = dailyDurations[MachineState.Idle] + 
+                                    (currentState == MachineState.Idle ? transition.ElapsedSeconds : 0);
+                                shiftData.ProductionCount = _connection.GetProductionCount();
+                                
+                                var logService = new LogDataService();
+                                logService.UpdateShiftStateData(shiftData);
+                                _lastDbUpdateTime[ip] = now;
+                                WriteStateLog($"[{ip}] 정기 DB 업데이트 완료 (LastUpdatedAt 갱신)");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteStateLog($"[{ip}] 정기 DB 업데이트 실패: {ex.Message}");
+                        }
+                    }
                     
                     // 상태 유지 중 시간 누적 로그 (10초마다 기록)
                     if (transition.ElapsedSeconds > 0 && transition.ElapsedSeconds % 10 == 0)
@@ -1037,10 +1088,16 @@ namespace FanucFocasTutorial
                     if (!ReadPmcBit(type_g4_3, (short)addr_g4_3, (short)bit_g4_3, out values.G4_3)) return false;
                 }
 
-                // G5.0 (투입 조건)
+                // G5.0 (MFIN)
                 if (ParsePmcAddress(_config.PmcG5_0, out short type_g5_0, out ushort addr_g5_0, out int bit_g5_0))
                 {
                     if (!ReadPmcBit(type_g5_0, (short)addr_g5_0, (short)bit_g5_0, out values.G5_0)) return false;
+                }
+
+                // G5.2 (SFIN)
+                if (ParsePmcAddress("G5.2", out short type_g5_2, out ushort addr_g5_2, out int bit_g5_2))
+                {
+                    ReadPmcBit(type_g5_2, (short)addr_g5_2, (short)bit_g5_2, out values.G5_2); // 실패해도 계속 진행
                 }
 
                 // X8.4 (비상정지)
@@ -1131,11 +1188,11 @@ namespace FanucFocasTutorial
         /// 5. 유휴 (Idle) - 기본값
         ///    위 조건에 해당하지 않는 경우
         /// </설비 상태 판별 우선순위>
-        private MachineState DetermineMachineState(PmcStateValues pmc)
+        private MachineState DetermineMachineState(PmcStateValues pmc, MachineState? currentState = null)
         {
             string ip = _connection?.IpAddress ?? "N/A";
             WriteStateLog($"[{ip}] ========== 설비 상태 판별 시작 ==========");
-            WriteStateLog($"[{ip}] PMC 신호값 - F0.7={B(pmc.F0_7)} F1.0={B(pmc.F1_0)} F3.5={B(pmc.F3_5)} F10={pmc.F10_value} G4.3={B(pmc.G4_3)} G5.0={B(pmc.G5_0)}");
+            WriteStateLog($"[{ip}] PMC 신호값 - F0.7={B(pmc.F0_7)} F1.0={B(pmc.F1_0)} F3.5={B(pmc.F3_5)} F10={pmc.F10_value} G4.3={B(pmc.G4_3)} G5.0={B(pmc.G5_0)} G5.2={B(pmc.G5_2)}");
             WriteStateLog($"[{ip}] 설정값 - LoadingMCode={_config.LoadingMCode}");
 
             // 1순위: 알람 체크 (최우선)
@@ -1186,27 +1243,37 @@ namespace FanucFocasTutorial
             }
 
             // 3순위: 투입중 (제품교체)
-            // 조건: LoadingMCode > 0 (설정된 경우만)
-            //    AND F0.7 = 1 (스타트 실행)
-            //    AND F3.5 = 1 (메모리 모드)
-            //    AND F10 = LoadingMCode (설정된 M코드와 일치)
-            //    AND (G4.3 = 1 OR G5.0 = 1) (M핀 처리 중 OR 투입 조건)
+            // 로직: F10=설정값이고 (G5.0=True OR G5.2=True)면 로딩 시작, 이후 (G5.0=True OR G5.2=True)면 로딩 유지
             bool loadingCondition1 = _config.LoadingMCode > 0;
             bool loadingCondition2 = pmc.F0_7;
             bool loadingCondition3 = pmc.F3_5;
             bool loadingCondition4 = pmc.F10_value == _config.LoadingMCode;
-            bool loadingCondition5 = pmc.G4_3 || pmc.G5_0;
+            bool loadingCondition5 = pmc.G4_3 || pmc.G5_0 || pmc.G5_2;  // G5.2 추가
             
             WriteStateLog($"[{ip}] [3순위] 제품교체(Loading) 체크:");
             WriteStateLog($"[{ip}]   - 조건1 (LoadingMCode > 0): {loadingCondition1} (설정값={_config.LoadingMCode})");
             WriteStateLog($"[{ip}]   - 조건2 (F0.7 스타트 실행): {loadingCondition2}");
             WriteStateLog($"[{ip}]   - 조건3 (F3.5 메모리 모드): {loadingCondition3}");
             WriteStateLog($"[{ip}]   - 조건4 (F10 = LoadingMCode): {loadingCondition4} (F10={pmc.F10_value}, 설정={_config.LoadingMCode})");
-            WriteStateLog($"[{ip}]   - 조건5 (G4.3 OR G5.0): {loadingCondition5} (G4.3={B(pmc.G4_3)}, G5.0={B(pmc.G5_0)})");
+            WriteStateLog($"[{ip}]   - 조건5 (G4.3 OR G5.0 OR G5.2): {loadingCondition5} (G4.3={B(pmc.G4_3)}, G5.0={B(pmc.G5_0)}, G5.2={B(pmc.G5_2)})");
+            WriteStateLog($"[{ip}]   - 현재 상태: {currentState}");
             
+            // 로딩 유지 조건: 현재 상태가 Loading이고 F10=140이고 (G5.0=True OR G5.2=True)면 로딩 유지
+            // F10=140이 필수 기준이고, G5.0/G5.2는 부가 조건
+            // F10≠140이면 G5.0/G5.2 값은 무시
+            if (currentState == MachineState.Loading && loadingCondition4 && (pmc.G5_0 || pmc.G5_2))
+            {
+                if (loadingCondition1 && loadingCondition2 && loadingCondition3)
+                {
+                    WriteStateLog($"[{ip}] ★★★ 상태 판별: LOADING (제품교체 중 - F10=140이고 G5.0 또는 G5.2 유지로 계속 로딩) ★★★");
+                    return MachineState.Loading;
+                }
+            }
+            // 로딩 시작 조건: F10=설정값(140)이고 (G5.0=True OR G5.2=True)
+            // F10=140이 필수 기준
             if (loadingCondition1 && loadingCondition2 && loadingCondition3 && loadingCondition4 && loadingCondition5)
             {
-                WriteStateLog($"[{ip}] ★★★ 상태 판별: LOADING (제품교체 중) ★★★");
+                WriteStateLog($"[{ip}] 로딩 시작: F10={pmc.F10_value}(설정={_config.LoadingMCode}), G5.0={pmc.G5_0}, G5.2={pmc.G5_2}, 현재상태={currentState} → Loading");
                 return MachineState.Loading;
             }
             WriteStateLog($"[{ip}] [3순위] 제품교체 조건 불만족 - 다음 조건 체크");
